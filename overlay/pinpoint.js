@@ -10,17 +10,38 @@
   // overlay posting to /api/feedback (defaults below); pinpoint's server prepends
   // `window.__reviewBrand` so the same code shows as PINPOINT and posts to its own API.
   const BRAND = Object.assign({ name: 'Review', key: 'design-review', api: '/api/feedback', server: 'design-review', port: 4990 }, window.__reviewBrand || {});
+  // Where a Send from the panel goes when the reviewer has not picked a target: a headless worker when the
+  // project dispatches to workers, and also when the server offers chat but the project was never installed
+  // (no required handler session). The drawer is worker-first, so the panel is too; an installed project that
+  // chose "dispatch": "session" keeps that choice.
+  const AUTO_WORKER = BRAND.dispatch === 'worker' || (Boolean(BRAND.chat) && !BRAND.requiredSession);
+  // With a worker target, a Send from the panel CONTINUES the page's current conversation when one is warm
+  // (same route, last activity inside the worker's idle window, or whatever the drawer has selected on this
+  // route) and starts a new one otherwise. The To line says which before sending; "start new" / "continue"
+  // flips it for the next Send only.
+  const CONTINUE_MS = 30 * 60 * 1000;
+  let convoTarget = null, convoForceNew = false, convoLine = null;
+  const samePath = (page) => { try { return new URL(page).pathname === location.pathname; } catch (e) { return false; } };
+  const warmConvo = (c) => Boolean(c) && samePath(c.page) && c.state !== 'error' && Date.now() - Date.parse(c.lastAt || c.startedAt || 0) < CONTINUE_MS;
+  const pickConvo = (list) => { const sel = chatUi && chatUi.cur ? list.find((c) => c.id === chatUi.cur) : null; if (sel && samePath(sel.page) && sel.state !== 'error') return sel; return list.find(warmConvo) || null; };
+  async function refreshConvoTarget() {
+    if (!AUTO_WORKER) return;
+    try { const r = await fetch(API + BRAND.chat); convoTarget = r.ok ? pickConvo(await r.json()) : null; } catch (e) { convoTarget = null; }
+    if (convoLine) convoLine();
+  }
+  // While the To line is showing, follow SPA route changes at once and re-check warmth now and then.
+  if (AUTO_WORKER) { let lastPath = location.pathname, lastAt = 0; setInterval(() => { if (!convoLine) return; const moved = location.pathname !== lastPath; if (moved || Date.now() - lastAt > 20000) { lastPath = location.pathname; lastAt = Date.now(); refreshConvoTarget(); } }, 1000); }
   const API = (document.currentScript && document.currentScript.src ? new URL(document.currentScript.src).origin : 'http://127.0.0.1:' + BRAND.port);
   const KEY = BRAND.key + ':' + location.pathname;
   const TYPES = ['bug', 'layout', 'copy', 'idea', 'question'];
-  const state = { on: false, pins: [], general: '', drag: null, editing: null, panelPos: null, collapsed: true, size: { w: 296, h: null }, popSize: { w: 320, h: null } };
+  const state = { on: false, pins: [], general: '', drag: null, editing: null, panelPos: null, collapsed: true, size: { w: 296, h: null }, popSize: { w: 320, h: null }, hintOpen: false };
   // pinpoint chat drawer (module near the end): while open, the floating panel yields to it
   let chatOpen = false, chatW = 420, chatEl = null, chatScale = 1, chatSlashKey = null, chatLb = null, chatMenuClose = null;
   try {
     const s = JSON.parse(localStorage.getItem(KEY) || 'null');
-    if (s) { state.pins = s.pins || []; state.general = s.general || ''; state.panelPos = s.panelPos || null; state.collapsed = s.collapsed !== false; state.size = s.size || state.size; state.popSize = s.popSize || state.popSize; }
+    if (s) { state.pins = s.pins || []; state.general = s.general || ''; state.panelPos = s.panelPos || null; state.collapsed = s.collapsed !== false; state.size = s.size || state.size; state.popSize = s.popSize || state.popSize; state.hintOpen = s.hintOpen === true; }
   } catch (e) {}
-  const save = () => { try { localStorage.setItem(KEY, JSON.stringify({ pins: state.pins, general: state.general, panelPos: state.panelPos, collapsed: state.collapsed, size: state.size, popSize: state.popSize })); } catch (e) {} };
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify({ pins: state.pins, general: state.general, panelPos: state.panelPos, collapsed: state.collapsed, size: state.size, popSize: state.popSize, hintOpen: state.hintOpen })); } catch (e) {} };
 
   const css = `
   :root{--dr-g:16,20,26;--dr-w:255,255,255;--dr-fg:#eef3f7;--dr-fg2:#aeb7c2;--dr-fg3:#6f7783;--dr-fg3b:#8a94a0;--dr-on-bg:#dfe6ec;--dr-on-fg:#0c1116}
@@ -63,6 +84,8 @@
   .dr-ann.on{border-color:rgba(57,217,138,.45);color:#eef3f7;background:rgba(57,217,138,.1)}
   .dr-fp-min{width:24px;height:24px;border-radius:7px;border:0;background:rgba(var(--dr-w),.06);color:#aeb8c2;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:15px;line-height:1;flex:none;padding:0}
   .dr-fp-min:hover{background:rgba(var(--dr-w),.14);color:#fff}
+  .dr-fp-min svg{display:block}
+  .dr-fp-bd textarea,.dr-pop textarea,.dr-pop input{cursor:text}
   .dr-fp-bd{padding:14px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;min-height:0;flex:1 1 auto}
   .dr-fp-bd::-webkit-scrollbar,.dr-fp-bd textarea::-webkit-scrollbar{width:8px;height:8px}
   .dr-fp-bd::-webkit-scrollbar-track,.dr-fp-bd textarea::-webkit-scrollbar-track{background:transparent}
@@ -86,6 +109,20 @@
   .dr-fp-bd .send{border:0;border-radius:10px;padding:11px;font:700 13px system-ui,sans-serif;background:#39d98a;color:var(--dr-on-fg);cursor:pointer}
   .dr-fp-bd .send:disabled{opacity:.4;cursor:not-allowed}
   .dr-fp-bd .hint{font-size:11px;color:var(--dr-fg3b);line-height:1.5}
+  .dr-fp-bd .hint .dr-fp-tg{display:inline-flex;align-items:center;gap:6px;border:0;background:transparent;padding:2px 0;margin:0;color:var(--dr-fg3);font:600 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;cursor:pointer}
+  .dr-fp-bd .hint .dr-fp-tg:hover{color:var(--dr-fg2)}
+  .dr-fp-bd .hint .chev{display:inline-block;width:5px;height:5px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-2px) rotate(45deg);transition:transform .22s cubic-bezier(.22,.61,.36,1)}
+  .dr-fp-bd .hint.off .chev{transform:translateY(0) rotate(-45deg)}
+  .dr-fp-fold{display:grid;grid-template-rows:1fr;opacity:1;transition:grid-template-rows .22s cubic-bezier(.22,.61,.36,1),opacity .18s ease}
+  .dr-fp-fold>div{overflow:hidden;min-height:0;padding-top:4px}
+  .dr-fp-bd .hint.off>.dr-fp-fold{grid-template-rows:0fr;opacity:0}
+  @media (prefers-reduced-motion:reduce){.dr-fp-fold,.dr-fp-bd .hint .chev{transition:none}}
+  .dr-fp-bd .dr-to{margin:-4px 0 8px;padding:4px;border-radius:10px;background:rgba(var(--dr-g),.55);border:1px solid rgba(var(--dr-w),.1);display:flex;flex-direction:column;gap:1px}
+  .dr-fp-bd .dr-to .op{display:grid;grid-template-columns:12px 1fr;gap:8px;align-items:center;width:100%;padding:6px 8px;border:0;border-radius:6px;background:none;color:var(--dr-fg);font:12px/1.4 ui-monospace,Menlo,monospace;text-align:left;cursor:pointer}
+  .dr-fp-bd .dr-to .op:hover,.dr-fp-bd .dr-to .op:focus-visible{background:rgba(var(--dr-w),.08);outline:none}
+  .dr-fp-bd .dr-to .op .ck{color:#39d98a;font-size:11px;text-align:center}
+  .dr-fp-bd .dr-to .op .lb{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dr-fp-bd .dr-to .op .d{color:var(--dr-fg3b);font-size:11px}
   .dr-fp-bd kbd{font:10px ui-monospace,Menlo,monospace;background:rgba(var(--dr-w),.08);border:1px solid rgba(var(--dr-w),.14);border-radius:4px;padding:1px 5px}
 
   /* ── overlay dock: one strip, a chip per overlay. click = cycle Open→Pill→Hidden, drag across = opacity ── */
@@ -174,14 +211,15 @@
   .dr-sn .ls{display:flex;flex-direction:column;gap:6px;padding:8px;overflow:auto;min-height:0}
   .dr-sn .ls::-webkit-scrollbar{width:8px}.dr-sn .ls::-webkit-scrollbar-thumb{background:rgba(var(--dr-w),.18);border-radius:4px}.dr-sn .ls{scrollbar-width:thin;scrollbar-color:rgba(var(--dr-w),.18) transparent}
   .dr-sn.pill{width:auto;border-radius:999px}.dr-sn.pill .hd{border-bottom:0;padding:7px 8px 7px 14px}.dr-sn.pill .ls{display:none}
-  .dr-sn .t{position:relative;box-sizing:border-box;background:rgba(var(--dr-w),.04);border:1px solid rgba(var(--dr-w),.07);border-radius:10px;padding:9px 32px 9px 11px;display:flex;flex-direction:column;gap:6px;animation:dr-sn-in .22s cubic-bezier(.2,.8,.2,1)}
+  .dr-sn .t{position:relative;box-sizing:border-box;background:rgba(var(--dr-w),.04);border:1px solid rgba(var(--dr-w),.07);border-radius:10px;padding:9px 11px;display:flex;flex-direction:column;gap:6px;animation:dr-sn-in .22s cubic-bezier(.2,.8,.2,1)}
   .dr-sn .t.out{animation:dr-sn-out .18s ease-in forwards}
   @keyframes dr-sn-in{from{transform:translateY(8px);opacity:0}}
   @keyframes dr-sn-out{to{transform:translateY(6px);opacity:0}}
   @media(prefers-reduced-motion:reduce){.dr-sn .t,.dr-sn .t.out{animation:none}}
   .dr-sn .t .tt{display:flex;align-items:center;gap:8px;font-weight:600;min-width:0;cursor:pointer;user-select:none}
   .dr-sn .t .tt span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .dr-sn .t .tt .mini{display:none;margin-left:auto;font:600 11px ui-monospace,Menlo,monospace;color:var(--dr-fg2);flex:none}
+  .dr-sn .t .tt .sp{flex:1}
+  .dr-sn .t .tt .mini{display:none;font:600 11px ui-monospace,Menlo,monospace;color:var(--dr-fg2);flex:none}
   .dr-sn .t.min .st,.dr-sn .t.min .pins{display:none}.dr-sn .t.min .tt .mini{display:block}
   .dr-sn .t .st{font-size:12px;color:var(--dr-fg2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .dr-sn .t .bar{height:4px;border-radius:99px;background:rgba(var(--dr-w),.09);overflow:hidden}
@@ -206,18 +244,20 @@
   .dr-sn .t .fb .fi.working{border-left-color:#ffb457;opacity:.8}
   .dr-sn .t .fb .fi.question{border-left-color:#4a90c2;background:rgba(74,144,194,.14);border-radius:0 7px 7px 0;padding:5px 8px;color:#dceaf6}
   .dr-sn .t .fb .fi.question b{color:#4a90c2}
-  .dr-sn .t .dm{position:absolute;top:6px;right:30px;width:22px;height:22px;border:0;border-radius:6px;background:transparent;color:var(--dr-fg3b);font:13px/22px system-ui,sans-serif;cursor:pointer;padding:0;display:none}
+  .dr-sn .t .dm,.dr-sn .t .mn{flex:none;width:22px;height:22px;border:0;border-radius:6px;background:transparent;color:var(--dr-fg3b);cursor:pointer;padding:0;display:inline-flex;align-items:center;justify-content:center}
+  .dr-sn .t .dm{display:none}.dr-sn .t .dm svg,.dr-sn .t .mn svg{display:block}
   .dr-sn .t .dm:hover{background:rgba(var(--dr-w),.08);color:var(--dr-fg)}
-  .dr-sn .t.ok .dm,.dr-sn .t.err .dm{display:block}.dr-sn .t.ok,.dr-sn .t.err{padding-right:54px}
+  .dr-sn .t.ok .dm,.dr-sn .t.err .dm{display:inline-flex}
   @keyframes dr-sn-pulse{50%{box-shadow:0 0 0 3px rgba(255,180,87,.25)}}
   @media(prefers-reduced-motion:reduce){.dr-sn .t .pins i.working{animation:none}}
-  .dr-sn .t .mn{position:absolute;top:6px;right:6px;width:22px;height:22px;border:0;border-radius:6px;background:transparent;color:var(--dr-fg3b);font:15px/22px system-ui,sans-serif;cursor:pointer;padding:0}
   .dr-sn .t .mn:hover{background:rgba(var(--dr-w),.08);color:var(--dr-fg)}
   .dr-sn .t.err{border-color:rgba(255,90,95,.45)}.dr-sn .t.ok .bar i{width:100%}
   .dr-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483601;background:#1d2229;color:#fff;padding:10px 16px;border-radius:999px;font:600 13px system-ui,sans-serif;box-shadow:0 12px 30px rgba(0,0,0,.35)}`;
   const st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
 
   const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
+  const ico = (d, w) => `<svg viewBox="0 0 24 24" width="${w || 13}" height="${w || 13}" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
+  const ICO = { plus: ico('M12 5v14M5 12h14', 12), minus: ico('M5 12h14', 12), x: ico('M6 6l12 12M18 6L6 18', 12) };
   const canvas = el('div', 'dr-canvas');
   const hover = el('div', 'dr-hover');
   const layer = el('div'); // pins + rects live here (fixed-position children)
@@ -307,8 +347,8 @@
     const t = el('div', 't wait' + (b.min ? ' min' : '')); t.dataset.id = b.id; t.dataset.tot = b.total || 1;
     const keys = b.total ? Array.from({ length: b.total }, (_, i) => String(i + 1)) : ['0']; // '0' = the general note (note-only batch)
     const tt = el('div', 'tt'), mini = el('span', 'mini', `0/${keys.length}`); tt.append(el('span', '', b.total ? `${b.total} pin${b.total === 1 ? '' : 's'} sent` : 'General note sent'), mini);
-    const setMin = (v) => { b.min = v; snSave(); t.classList.toggle('min', v); mn.textContent = v ? '+' : '–'; mn.title = v ? 'Expand' : 'Minimise'; };
-    const mn = el('button', 'mn', b.min ? '+' : '–'); mn.title = b.min ? 'Expand' : 'Minimise'; mn.onclick = () => setMin(!b.min);
+    const setMin = (v) => { b.min = v; snSave(); t.classList.toggle('min', v); mn.innerHTML = v ? ICO.plus : ICO.minus; mn.title = v ? 'Expand' : 'Minimise'; };
+    const mn = el('button', 'mn', b.min ? ICO.plus : ICO.minus); mn.title = b.min ? 'Expand' : 'Minimise'; mn.setAttribute('aria-label', 'Minimise'); mn.onclick = (e) => { e.stopPropagation(); setMin(!b.min); };
     tt.onclick = () => setMin(!b.min); tt.title = 'Click to minimise/expand';
     if (BRAND.chat) { const cb = el('button', '', 'chat'); cb.style.cssText = 'cursor:pointer;border:0;background:rgba(255,255,255,.12);color:inherit;font:600 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;border-radius:99px;padding:3px 8px;margin-left:6px'; cb.title = 'Open the chat with this batch\'s worker'; cb.onclick = (e) => { e.stopPropagation(); openChat(b.id); }; tt.append(cb); }
     const st = el('div', 'st', 'Waiting for a session to pick it up…');
@@ -317,8 +357,8 @@
     // Notes the working session writes with report-pin render here, so a question asked
     // through a pin is answered on the page instead of only in that session's terminal.
     const fb = el('div', 'fb'); fb.style.display = 'none';
-    const dm = el('button', 'dm', '✕'); dm.title = 'Dismiss'; dm.onclick = () => { stop(); snDrop(b.id); snRemove(t); };
-    t.append(tt, st, bar, pins, fb, mn, dm); snLs.appendChild(t); snHeader(); snApply();
+    const dm = el('button', 'dm', ICO.x); dm.title = 'Dismiss'; dm.setAttribute('aria-label', 'Dismiss'); dm.onclick = (e) => { e.stopPropagation(); stop(); snDrop(b.id); snRemove(t); };
+    tt.append(el('span', 'sp'), mini, mn, dm); t.append(tt, st, bar, pins, fb); snLs.appendChild(t); snHeader(); snApply();
     let timer = null, misses = 0, doneAt = 0;
     const stop = () => { if (timer) clearTimeout(timer); timer = null; };
     t._stop = stop; // snRetrack ends a card's polling before replacing it with a grown one
@@ -413,9 +453,9 @@
       Object.assign(panel.style, { width: '', height: '' });
       dot = el('i', 'dr-dot');
       const b = el('b'); b.append(dot, document.createTextNode(BRAND.name)); hdCount = el('span', 'dr-cnt', '0'); b.append(hdCount);
-      const x = el('button', 'dr-fp-min', '⤢'); x.setAttribute('aria-label', 'Expand'); x.onclick = () => setCollapsed(false);
+      const x = el('button', 'dr-fp-min', '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>'); x.setAttribute('aria-label', 'Expand'); x.onclick = () => setCollapsed(false);
       panel.append(el('span', 'dr-grip', '⋮⋮'), b, ...(BRAND.chat ? [chatBtn()] : []), x);
-      body = null; annBtn = null;
+      body = null; annBtn = null; convoLine = null;
       dragOrClick(panel, panel, (x2, y2) => { state.panelPos = { x: x2, y: y2 }; placePanel(); save(); }, () => setCollapsed(false));
     } else {
       Object.assign(panel.style, { width: state.size.w + 'px', height: state.size.h ? state.size.h + 'px' : '' });
@@ -423,7 +463,7 @@
       const b = el('b'); b.append(el('span', 'dr-grip', '⋮⋮'), document.createTextNode(BRAND.name)); hdCount = el('span', 'dr-cnt', '0'); b.append(hdCount);
       const r = el('div', 'r');
       dot = el('i', 'dr-dot'); annBtn = el('button', 'dr-ann'); annBtn.append(dot, document.createTextNode('annotate')); annBtn.title = 'Toggle annotate mode (R)'; annBtn.onclick = toggle;
-      const m = el('button', 'dr-fp-min', '–'); m.setAttribute('aria-label', 'Collapse'); m.onclick = () => setCollapsed(true);
+      const m = el('button', 'dr-fp-min', '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/></svg>'); m.setAttribute('aria-label', 'Collapse'); m.onclick = () => setCollapsed(true);
       r.append(annBtn, ...(BRAND.chat ? [chatBtn()] : []), m); hd.append(b, r);
       body = el('div', 'dr-fp-bd');
       const rz = el('div', 'dr-fp-rz'); rz.setAttribute('aria-label', 'Resize');
@@ -479,39 +519,56 @@
     if (BRAND.sessions) {
       // Multi-session addressing (pinpoint). Collapsed by default to one quiet line
       // ("To: Auto · change"); the picker only appears when the user asks for it.
-      const cur = localStorage.getItem(BRAND.key + ':to') || '';
+      let cur = localStorage.getItem(BRAND.key + ':to') || '';
       const line = el('div', 'hint'); line.style.cssText = 'display:flex;gap:6px;align-items:center;margin:2px 0 8px';
-      const autoLabel = BRAND.dispatch === 'worker' ? 'Auto (worker)' : 'Auto';
+      const autoLabel = AUTO_WORKER ? 'Auto (worker)' : 'Auto';
       const who = el('span'); who.textContent = 'To: ' + (cur ? (cur === 'worker' ? 'Headless worker' : cur) : autoLabel);
       const chg = el('button'); chg.type = 'button'; chg.textContent = 'change'; chg.style.cssText = 'background:none;border:0;padding:0;color:inherit;text-decoration:underline;cursor:pointer;font:inherit';
-      line.append(who, chg); body.append(line);
-      const sel = el('select'); sel.className = 'dr-to'; sel.style.cssText = 'display:none;width:100%;margin:0 0 8px;padding:6px 8px;border-radius:8px;border:1px solid rgba(0,0,0,.15);font:inherit;background:#fff;color:#111';
-      const fill = (list) => {
-        // Rebuilding options while the native dropdown is open makes Chromium dismiss
-        // it instantly — skip the rebuild when the list hasn't actually changed.
-        const sig = JSON.stringify(list.map((s) => [s.id, s.label, s.cwd]));
-        if (sel.dataset.sig === sig) return;
-        sel.dataset.sig = sig;
-        sel.innerHTML = '';
-        const any = document.createElement('option'); any.value = ''; any.textContent = BRAND.dispatch === 'worker' ? 'Auto — headless worker (chat in the drawer)' : 'Auto — a session named *' + BRAND.server + '*, else first to pick it up'; sel.append(any);
-        if (BRAND.chat) { const wk = document.createElement('option'); wk.value = 'worker'; wk.textContent = 'Headless worker — always spawn one for this batch'; sel.append(wk); }
-        list.forEach((s) => { const o = document.createElement('option'); o.value = s.id; o.textContent = s.label + (s.cwd ? ' — ' + s.cwd.split('/').pop() : ''); sel.append(o); });
-        sel.value = [...sel.options].some((o) => o.value === cur) ? cur : '';
-        who.textContent = 'To: ' + (sel.value ? sel.options[sel.selectedIndex].textContent.split(' — ')[0] : autoLabel);
+      const alt = el('button'); alt.type = 'button'; alt.style.cssText = chg.style.cssText; alt.style.display = 'none'; alt.title = 'Flip for the next Send only';
+      alt.onclick = () => { convoForceNew = !convoForceNew; if (convoLine) convoLine(); };
+      line.append(who, alt, chg); body.append(line);
+      // Themed in-flow list (a native <select> is off-theme and Chromium dismisses its popup
+      // whenever the panel re-lays out). "change" toggles it; picking an option closes it.
+      const menu = el('div', 'dr-to'); menu.style.display = 'none'; menu.setAttribute('role', 'listbox');
+      let known = [];
+      const nameOf = (v, list) => v === 'worker' ? 'Headless worker' : v ? ((list.find((x) => x.id === v) || {}).label || v) : autoLabel;
+      const fill = (list, fetched) => {
+        known = list;
+        if (fetched && cur && cur !== 'worker' && !list.some((x) => x.id === cur)) { cur = ''; localStorage.removeItem(BRAND.key + ':to'); } // the chosen session is gone: back to Auto, never send a stale id
+        const items = [{ v: '', t: 'Auto', d: AUTO_WORKER ? 'headless worker, chat in the drawer' : 'a session named *' + BRAND.server + '*, else first to pick it up' }];
+        if (BRAND.chat && !AUTO_WORKER) items.push({ v: 'worker', t: 'Headless worker', d: 'always spawn one for this batch' });
+        list.forEach((x) => items.push({ v: x.id, t: x.label, d: x.cwd ? x.cwd.split('/').pop() : '' }));
+        menu.innerHTML = '';
+        items.forEach((i) => {
+          const op = el('button', 'op' + (i.v === cur ? ' on' : '')); op.type = 'button'; op.setAttribute('role', 'option'); op.setAttribute('aria-selected', String(i.v === cur));
+          op.innerHTML = '<span class="ck">' + (i.v === cur ? '&#10003;' : '') + '</span><span class="lb">' + esc(i.t) + (i.d ? ' <span class="d">' + esc(i.d) + '</span>' : '') + '</span>';
+          op.onclick = () => { cur = i.v; if (cur) localStorage.setItem(BRAND.key + ':to', cur); else localStorage.removeItem(BRAND.key + ':to'); fill(known, true); menu.style.display = 'none'; };
+          menu.append(op);
+        });
+        convoLine();
       };
-      fill([]);
-      sel.onchange = () => { localStorage.setItem(BRAND.key + ':to', sel.value); who.textContent = 'To: ' + (sel.value ? sel.options[sel.selectedIndex].textContent.split(' — ')[0] : autoLabel); sel.style.display = 'none'; };
-      // Fetch BEFORE revealing the picker so the option list never mutates while the
-      // user is opening the native dropdown (the mutation is what closed it).
+      const convoTitle = (c) => { let path = c.page; try { path = new URL(c.page).pathname; } catch (e) {} const t = new Date(c.startedAt || c.lastAt); const hh = isNaN(t) ? '' : t.toTimeString().slice(0, 5); return hh + ' ' + path + (c.pins ? ' \u00b7 ' + c.pins + ' pin' + (c.pins === 1 ? '' : 's') : ''); };
+      convoLine = () => {
+        if (!AUTO_WORKER || cur) { who.textContent = 'To: ' + nameOf(cur, known); alt.style.display = 'none'; return; }
+        const cont = Boolean(convoTarget) && !convoForceNew;
+        who.textContent = cont ? 'Continuing ' + convoTitle(convoTarget) : 'New conversation';
+        alt.textContent = cont ? 'start new' : 'continue'; alt.style.display = convoTarget ? '' : 'none';
+      };
+      fill([], false);
       chg.onclick = () => {
-        if (sel.style.display !== 'none') { sel.style.display = 'none'; return; }
-        fetch(API + BRAND.sessions).then((r) => r.json()).then(fill).catch(() => {}).finally(() => { sel.style.display = 'block'; });
+        if (menu.style.display !== 'none') { menu.style.display = 'none'; return; }
+        fetch(API + BRAND.sessions).then((r) => r.json()).then((l) => fill(l, true)).catch(() => {}).finally(() => { menu.style.display = ''; });
       };
-      body.append(sel);
-      if (cur) fetch(API + BRAND.sessions).then((r) => r.json()).then(fill).catch(() => {});
+      body.append(menu);
+      if (AUTO_WORKER) refreshConvoTarget();
+      if (cur) fetch(API + BRAND.sessions).then((r) => r.json()).then((l) => fill(l, true)).catch(() => {});
     }
     const sendBtn = el('button', 'send', 'Send to Claude →'); sendBtn.disabled = !canSend(); sendBtn.onclick = send; body.append(sendBtn);
-    body.append(el('div', 'hint', '<kbd>R</kbd> annotate on/off · <kbd>Esc</kbd> close popover · <kbd>⌘↵</kbd> send · <kbd>⌥↵</kbd> save · drag the header to move · pins persist in this browser until sent'));
+    // Shortcuts fold: closed by default (it is reference, not workflow), remembered per page.
+    const hint = el('div', 'hint' + (state.hintOpen ? '' : ' off'));
+    const hintTg = el('button', 'dr-fp-tg'); hintTg.type = 'button'; hintTg.title = 'Show / hide the shortcuts'; hintTg.setAttribute('aria-expanded', String(!!state.hintOpen)); hintTg.innerHTML = '<i class="chev"></i>shortcuts';
+    hintTg.onclick = () => { const off = hint.classList.toggle('off'); hintTg.setAttribute('aria-expanded', String(!off)); state.hintOpen = !off; save(); };
+    const hintFd = el('div', 'dr-fp-fold'); const hintIn = el('div'); hintIn.innerHTML = '<kbd>R</kbd> annotate on/off · <kbd>Esc</kbd> close popover · <kbd>⌘↵</kbd> send · <kbd>⌥↵</kbd> save · drag the header to move · pins persist in this browser until sent'; hintFd.append(hintIn); hint.append(hintTg, hintFd); body.append(hint);
   }
   const canSend = () => state.pins.some((p) => p.comment) || state.general.trim().length > 0;
 
@@ -620,8 +677,21 @@
 
   // ── send ──
   async function send() {
-    const body = { page: location.href, title: document.title, viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio }, state: appState(), general: state.general, pins: state.pins, to: BRAND.sessions ? (localStorage.getItem(BRAND.key + ':to') || '') : undefined };
+    const chosen = BRAND.sessions ? (localStorage.getItem(BRAND.key + ':to') || '') : '';
+    const cont = AUTO_WORKER && !chosen && convoTarget && !convoForceNew ? convoTarget : null;
+    const body = { page: location.href, title: document.title, viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio }, state: appState(), general: state.general, pins: state.pins, to: BRAND.sessions ? (chosen || (AUTO_WORKER ? 'worker' : '')) : undefined };
     try {
+      if (cont) {
+        // Continue the page's conversation: the drawer's own path (pins are appended to its batch, numbered on).
+        const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(cont.id), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: state.general, pins: state.pins }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error([j.error, j.hint].filter(Boolean).join(' \u2014 ') || String(r.status));
+        if (state.pins.length) { if (Number(j.total) > 0) { if (snHidden) snSetHidden(false); snRetrack(cont.id, Number(j.total)); } else snNotice('Sent, but this pinpoint server ignored the pins \u2014 restart it.', 'err', 8000); }
+        state.pins = []; state.general = ''; save(); state.on = false; closePop();
+        if (BRAND.chat) openChat(cont.id);
+        refreshConvoTarget();
+        return;
+      }
       const r = await fetch(API + BRAND.api, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       if (!r.ok) { let m = ''; try { const j = await r.json(); m = [j.error, j.hint].filter(Boolean).join(' — '); } catch (_) {} throw new Error(m || String(r.status)); }
       const j = await r.json();
@@ -629,6 +699,7 @@
       snBatches.push(b); snSave(); if (snHidden) snSetHidden(false); snTrack(b);
       state.pins = []; state.general = ''; save(); state.on = false; closePop();
       if (BRAND.chat && j.worker) openChat(j.id);
+      convoForceNew = false; refreshConvoTarget(); // the new conversation is what the next Send continues
     } catch (e) {
       // A refusal from the server (e.g. no pinpoint_<project> session is live) carries its
       // own hint; anything else (network, non-JSON) is almost always "server not running".
@@ -1107,6 +1178,25 @@
   .dr-chat .m.ai::before{content:'⏺';color:var(--dr-fg2)}
   .dr-chat .m pre{margin:6px 0;padding:8px;border-radius:8px;background:rgba(0,0,0,.35);font:11px/1.45 ui-monospace,Menlo,monospace;overflow:hidden;max-width:100%;white-space:pre-wrap;overflow-wrap:anywhere}
   .dr-chat .m code{font:11px ui-monospace,Menlo,monospace;background:rgba(var(--dr-w),.1);padding:1px 4px;border-radius:4px}
+  .dr-chat .m .qa{margin:8px 0 2px;padding:10px;border-radius:10px;background:rgba(var(--dr-w),.05);border:1px solid rgba(var(--dr-w),.1)}
+  .dr-chat .m .qnav{display:flex;align-items:center;margin-bottom:8px;font:600 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--dr-fg3b)}
+  .dr-chat .m .qstep{display:none}.dr-chat .m .qstep.on,.dr-chat .m .qa.answered .qstep{display:block}
+  .dr-chat .m .qa.answered .qstep+.qstep{margin-top:10px;padding-top:10px;border-top:1px solid rgba(var(--dr-w),.08)}
+  .dr-chat .m .qq{font-weight:600;color:var(--dr-fg);margin-bottom:8px}
+  .dr-chat .m .qo{display:flex;flex-direction:column;gap:6px}
+  .dr-chat .m .qb{text-align:left;cursor:pointer;border:1px solid rgba(var(--dr-w),.14);background:rgba(var(--dr-w),.06);color:var(--dr-fg);font:12px/1.4 ui-monospace,Menlo,SFMono-Regular,monospace;border-radius:8px;padding:7px 10px;transition:background .12s,border-color .12s}
+  .dr-chat .m .qb:hover,.dr-chat .m .qb:focus-visible{background:rgba(var(--dr-w),.12);border-color:rgba(var(--dr-w),.26);outline:none}
+  .dr-chat .m .qb.on{border-color:#39d98a;background:rgba(57,217,138,.14)}
+  .dr-chat .m .qa.answered .qb{opacity:.45;cursor:default}.dr-chat .m .qa.answered .qb.on{opacity:1}
+  .dr-chat .m .qf{display:flex;gap:6px;margin-top:6px}
+  .dr-chat .m .qi{flex:1;min-width:0;box-sizing:border-box;background:rgba(var(--dr-w),.05);border:1px solid rgba(var(--dr-w),.14);border-radius:8px;color:var(--dr-fg);font:12px/1.4 ui-monospace,Menlo,SFMono-Regular,monospace;padding:7px 10px;outline:none;cursor:text}
+  .dr-chat .m .qi::placeholder{color:var(--dr-fg3b)}.dr-chat .m .qi:focus{border-color:rgba(var(--dr-w),.3)}
+  .dr-chat .m .qact{display:flex;align-items:center;gap:6px;margin-top:10px}.dr-chat .m .qact .sp{flex:1}
+  .dr-chat .m .qact button{cursor:pointer;border:1px solid rgba(var(--dr-w),.14);background:rgba(var(--dr-w),.06);color:var(--dr-fg);font:600 11px/1 ui-monospace,Menlo,SFMono-Regular,monospace;letter-spacing:.04em;border-radius:8px;padding:8px 12px;transition:background .12s,border-color .12s}
+  .dr-chat .m .qact button:hover{background:rgba(var(--dr-w),.12);border-color:rgba(var(--dr-w),.26)}
+  .dr-chat .m .qact .qsub{background:#39d98a;border-color:#39d98a;color:#0c1116}.dr-chat .m .qact .qsub:hover{background:#4fe39a;border-color:#4fe39a}
+  .dr-chat .m .qa.answered .qact,.dr-chat .m .qa.answered .qnav{display:none}
+  .dr-chat .m .qa.answered .qf{opacity:.45;pointer-events:none}.dr-chat .m .qa.answered .qf.on{opacity:1}.dr-chat .m .qa.answered .qf.on .qi{border-color:#39d98a;background:rgba(57,217,138,.14)}
   .dr-chat .m .cb{position:relative}.dr-chat .m .cb pre{padding-right:58px}
   .dr-chat .m .cp{position:absolute;top:6px;right:6px;cursor:pointer;border:1px solid rgba(var(--dr-w),.14);background:rgba(var(--dr-g),.92);color:var(--dr-fg3);font:600 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;border-radius:6px;padding:4px 6px;opacity:.55;transition:opacity .12s,color .12s}
   .dr-chat .m .cb:hover .cp,.dr-chat .m .cp:focus-visible{opacity:1}.dr-chat .m .cp.on{opacity:1;color:var(--dr-fg)}
@@ -1140,7 +1230,7 @@
   .dr-chat-box{display:flex;flex-direction:column;background:rgba(var(--dr-w),.05);border:1px solid rgba(var(--dr-w),.12);border-radius:12px}
   .dr-chat-box:focus-within{border-color:rgba(var(--dr-w),.3)}
   .dr-chat-tools{display:flex;align-items:center;justify-content:space-between;padding:2px 6px 6px}
-  .dr-chat-ta{display:block;width:100%;box-sizing:border-box;resize:none;min-height:44px;max-height:50vh;height:72px;overflow-y:auto;background:transparent;border:0;border-radius:12px 12px 0 0;color:var(--dr-fg);padding:9px 11px 4px;font:13px/1.4 system-ui,sans-serif;scrollbar-width:thin;scrollbar-color:rgba(var(--dr-w),.18) transparent}
+  .dr-chat-ta{display:block;width:100%;box-sizing:border-box;resize:none;min-height:44px;max-height:50vh;height:72px;overflow-y:auto;background:transparent;border:0;border-radius:12px 12px 0 0;color:var(--dr-fg);padding:9px 11px 4px;font:13px/1.4 system-ui,sans-serif;cursor:text;scrollbar-width:thin;scrollbar-color:rgba(var(--dr-w),.18) transparent}
   .dr-chat-ta::-webkit-scrollbar{width:8px}.dr-chat-ta::-webkit-scrollbar-track{background:transparent}.dr-chat-ta::-webkit-scrollbar-thumb{background:rgba(var(--dr-w),.18);border-radius:4px}
   .dr-chat-hint{padding:2px 14px 18px;font-size:11px;color:var(--dr-fg3b);line-height:1.6}
   .dr-chat-tg{display:inline-flex;align-items:center;gap:6px;border:0;background:transparent;padding:2px 0;margin:0;color:var(--dr-fg3);font:600 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;cursor:pointer}
@@ -1247,8 +1337,39 @@
   // markdown-lite: fenced code, inline code, bold, pipe tables, line breaks — enough for a worker's numbered reply
   const inline = (t) => esc(t).replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
   const isRow = (l) => /^\s*\|.*\|\s*$/.test(l || ''), cells = (l) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => inline(c.trim()));
-  const md = (v) => String(v == null ? '' : v).split(/```/).map((part, i) => {
-    if (i % 2) return `<div class="cb"><pre>${esc(part.replace(/^[a-z]*\n/, ''))}</pre><button class="cp" type="button" title="Copy to clipboard">copy</button></div>`;
+  // ```question blocks from a worker (first line(s) the question, each "- " line a choice). All the blocks of one
+  // message form ONE stepper: a question at a time with Back / Next, a free-text field on every step, and a single
+  // Submit at the end that sends every answer in one message (chatAnswer). A lone block is just its Submit.
+  const parseQuestion = (body) => {
+    const q = [], o = [];
+    body.split('\n').forEach((l) => { const m = /^\s*(?:[-*]|\d+[.)])\s+(.+?)\s*$/.exec(l); if (m) o.push(m[1]); else if (l.trim() && !o.length) q.push(l.trim()); });
+    return o.length ? { q: q.join(' '), o } : null;
+  };
+  const stepperHtml = (qs) => {
+    const n = qs.length;
+    const steps = qs.map((x, i) => `<div class="qstep${i === 0 ? ' on' : ''}" data-i="${i}" data-q="${esc(x.q)}">${x.q ? '<div class="qq">' + inline(x.q) + '</div>' : ''}<div class="qo">${x.o.map((c) => '<button type="button" class="qb" data-a="' + esc(c) + '">' + inline(c) + '</button>').join('')}</div><form class="qf"><input class="qi" type="text" placeholder="Type your own, or add a note\u2026" autocomplete="off" spellcheck="false"></form></div>`).join('');
+    const nav = n > 1 ? `<div class="qnav"><span class="qpos">1 of ${n}</span></div>` : '';
+    const act = `<div class="qact">${n > 1 ? '<button type="button" class="qback" style="visibility:hidden">Back</button>' : ''}<span class="sp"></span>${n > 1 ? '<button type="button" class="qnext">Next</button>' : ''}<button type="button" class="qsub"${n > 1 ? ' style="display:none"' : ''}>Submit</button></div>`;
+    return `<div class="qa" data-n="${n}">${nav}${steps}${act}</div>`;
+  };
+  const stepAnswer = (st) => { const b = st.querySelector('.qb.on'), inp = st.querySelector('.qi'); return { choice: b ? b.dataset.a || b.textContent.trim() : '', typed: inp ? inp.value.trim() : '' }; };
+  function stepSync(qa) {
+    const steps = [...qa.querySelectorAll('.qstep')], cur = steps.findIndex((x) => x.classList.contains('on')), last = cur === steps.length - 1;
+    const pos = qa.querySelector('.qpos'); if (pos) pos.textContent = (cur + 1) + ' of ' + steps.length;
+    const back = qa.querySelector('.qback'), next = qa.querySelector('.qnext'), sub = qa.querySelector('.qsub');
+    if (back) back.style.visibility = cur > 0 ? '' : 'hidden';
+    if (next) next.style.display = last ? 'none' : '';
+    if (sub) sub.style.display = last ? '' : 'none';
+  }
+  function stepGo(qa, dir) {
+    const steps = [...qa.querySelectorAll('.qstep')], cur = steps.findIndex((x) => x.classList.contains('on'));
+    if (dir > 0) { const a = stepAnswer(steps[cur]); if (!a.choice && !a.typed) { const inp = steps[cur].querySelector('.qi'); if (inp) inp.focus(); return; } }
+    const next = Math.max(0, Math.min(steps.length - 1, cur + dir)); if (next === cur) return;
+    steps.forEach((x, i) => x.classList.toggle('on', i === next)); stepSync(qa);
+  }
+  const md = (v) => { const qs = []; const html = mdParts(v, qs); return html.replace(/(<br>)+$/, '') + (qs.length ? stepperHtml(qs) : ''); };
+  const mdParts = (v, qs) => String(v == null ? '' : v).split(/```/).map((part, i) => {
+    if (i % 2) { const qm = /^question[ \t]*\r?\n([\s\S]*)$/.exec(part); if (qm) { const q = parseQuestion(qm[1]); if (q) { qs.push(q); return ''; } return `<pre>${esc(qm[1])}</pre>`; } return `<div class="cb"><pre>${esc(part.replace(/^[a-z]*\n/, ''))}</pre><button class="cp" type="button" title="Copy to clipboard">copy</button></div>`; }
     const ls = part.split('\n'), out = [];
     for (let j = 0; j < ls.length; j++) {
       if (isRow(ls[j]) && /^\s*\|?(\s*:?-+:?\s*\|)+\s*(:?-+:?\s*)?\|?\s*$/.test(ls[j + 1] || '')) { // header | separator | rows
@@ -1271,8 +1392,8 @@
     const ttl = el('b'); ttl.append(document.createTextNode(BRAND.name), el('span', 'sub', 'chat'));
     const r = el('div', 'r');
     const ann = el('button', 'dr-ann'); const d2 = el('i', 'dr-dot'); ann.append(d2, document.createTextNode('annotate')); ann.title = 'Toggle annotate mode (R)'; ann.onclick = toggle; chatEl._dot = d2; chatEl._ann = ann;
-    const nw = el('button', 'dr-fp-min', '+'); nw.title = 'New conversation — your message starts a fresh worker for this page'; nw.onclick = () => selectConvo(null);
-    const x = el('button', 'dr-fp-min', '×'); x.title = 'Close chat (Esc) — the panel comes back'; x.onclick = closeChat;
+    const nw = el('button', 'dr-fp-min', '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>'); nw.setAttribute('aria-label', 'New conversation'); nw.title = 'New conversation — your message starts a fresh worker for this page'; nw.onclick = () => selectConvo(null);
+    const x = el('button', 'dr-fp-min', '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>'); x.setAttribute('aria-label', 'Close chat'); x.title = 'Close chat (Esc) — the panel comes back'; x.onclick = closeChat;
     r.append(ann, nw, x); hd.append(ttl, r);
     const bar = el('div', 'dr-chat-bar');
     chatSel = el('div', 'dr-chat-sel');
@@ -1367,8 +1488,13 @@
     chatEl.addEventListener('drop', (e) => { e.preventDefault(); dragDepth = 0; chatEl.classList.remove('drop'); if (e.dataTransfer) [...e.dataTransfer.files].forEach(addImageFile); });
     chatLs.addEventListener('click', (e) => {
       const t = e.target; if (t instanceof HTMLImageElement && t.closest('.imgs')) return openLightbox(t.src, t.alt, t.getBoundingClientRect());
-      const cp = t instanceof Element ? t.closest('.cp') : null; if (cp) { const pre = cp.parentElement && cp.parentElement.querySelector('pre'); copyText(pre ? pre.textContent : '', cp); }
+      const cp = t instanceof Element ? t.closest('.cp') : null; if (cp) { const pre = cp.parentElement && cp.parentElement.querySelector('pre'); copyText(pre ? pre.textContent : '', cp); return; }
+      const qb = t instanceof Element ? t.closest('.qb') : null;
+      if (qb) { const qa = qb.closest('.qa'), st = qb.closest('.qstep'); if (qa && st && !qa.classList.contains('answered')) { const was = qb.classList.contains('on'); st.querySelectorAll('.qb').forEach((b) => b.classList.remove('on')); if (!was) qb.classList.add('on'); } return; }
+      const nb = t instanceof Element ? t.closest('.qback, .qnext, .qsub') : null;
+      if (nb) { const qa = nb.closest('.qa'); if (!qa || qa.classList.contains('answered')) return; if (nb.classList.contains('qback')) stepGo(qa, -1); else if (nb.classList.contains('qnext')) stepGo(qa, 1); else chatAnswer(qa); }
     });
+    chatLs.addEventListener('submit', (e) => { const f = e.target instanceof Element ? e.target.closest('.qf') : null; if (!f) return; e.preventDefault(); const qa = f.closest('.qa'), steps = [...qa.querySelectorAll('.qstep')]; if (steps.indexOf(f.closest('.qstep')) === steps.length - 1) chatAnswer(qa); else stepGo(qa, 1); });
     const rz = el('div', 'dr-chat-rz'); rz.title = 'Resize';
     rz.addEventListener('pointerdown', (e) => {
       e.preventDefault(); const sx = e.clientX, w0 = chatW;
@@ -1430,8 +1556,27 @@
       default: return null;
     }
   };
+  // A reviewer message settles every open question block above it (also on replay after a reload): lock
+  // it and highlight what was sent per step, so a stale block cannot be answered twice.
+  function lockQuestions(text) {
+    const all = String(text == null ? '' : text), lines = all.split('\n');
+    chatLs.querySelectorAll('.qa:not(.answered)').forEach((qa) => {
+      qa.classList.add('answered');
+      const steps = [...qa.querySelectorAll('.qstep')];
+      steps.forEach((st) => {
+        let ans = all.trim();
+        if (steps.length > 1) { const q = st.dataset.q || ''; const l = q ? lines.find((x) => x.startsWith(q + ' \u2192 ')) : null; ans = l ? l.slice(q.length + 3).trim() : ''; }
+        const parts = steps.length === 1 ? ans.split('\n') : ans.split(' \u00b7 ');
+        const first = (parts[0] || '').trim(), rest = parts.slice(1).join(steps.length === 1 ? '\n' : ' \u00b7 ').trim();
+        let hit = null; st.querySelectorAll('.qb').forEach((b) => { b.classList.remove('on'); if (!hit && (b.dataset.a || '') === first) hit = b; });
+        if (hit) hit.classList.add('on');
+        const inp = st.querySelector('.qi'), slot = st.querySelector('.qf'), typed = hit ? rest : ans;
+        if (inp && typed) { inp.value = typed; if (slot) slot.classList.add('on'); }
+      });
+    });
+  }
   function chatAppend(ev) {
-    if (!chatLs) return; const node = chatLine(ev); if (!node) return;
+    if (!chatLs) return; if (ev.t === 'user') lockQuestions(ev.text); const node = chatLine(ev); if (!node) return;
     if (ev.t === 'status' && ev.reset) { chatLs.innerHTML = ''; chatAtBottom = true; } // /clear wipes the drawer transcript as well: live, and on replay so a reload stays cleared
     if (ev.t === 'tool_error') { const last = [...chatLs.querySelectorAll('.m.tool:not(.err)')].pop(); if (last) last.classList.add('failed'); } // the failed call's dot turns red
     chatLs.appendChild(node); if (chatAtBottom) chatLs.scrollTop = chatLs.scrollHeight;
@@ -1466,7 +1611,7 @@
   async function loadConvos() { try { const r = await fetch(API + BRAND.chat); chatConvos = r.ok ? await r.json() : []; } catch (e) { chatConvos = []; } fillConvos(); }
   function selectConvo(id) {
     if (chatEs) { chatEs.close(); chatEs = null; }
-    chatUi.cur = id || null; chatSave();
+    chatUi.cur = id || null; chatSave(); if (AUTO_WORKER) refreshConvoTarget();
     if (!chatLs) return;
     chatLs.innerHTML = ''; chatAtBottom = true; selSync();
     if (!id) { chatStatus(null); chatAppend({ t: 'error', text: '' }); chatLs.innerHTML = ''; const d = el('div', 'm status'); d.innerHTML = 'A message here starts a new worker for this page (sent as a general note). Pins you place while the drawer is open are listed above the box and go out with it.'; chatLs.append(d); return; }
@@ -1478,6 +1623,23 @@
       chatAppend(ev);
     };
     chatEs.onerror = () => chatStatus('disconnected');
+  }
+  // Submit sends every step's answer in one message. One question: the choice and/or the typed text (text on
+  // its own line). Several: one "question \u2192 answer" line per step, typed text after " \u00b7 " or as the answer.
+  async function chatAnswer(qa) {
+    if (!chatUi.cur || !qa || qa.classList.contains('answered')) return;
+    const steps = [...qa.querySelectorAll('.qstep')], answers = steps.map(stepAnswer);
+    const missing = answers.findIndex((a) => !a.choice && !a.typed);
+    if (missing >= 0) { steps.forEach((x, i) => x.classList.toggle('on', i === missing)); stepSync(qa); const inp = steps[missing].querySelector('.qi'); if (inp) inp.focus(); return; }
+    const text = steps.length === 1 ? [answers[0].choice, answers[0].typed].filter(Boolean).join('\n')
+      : steps.map((x, i) => (x.dataset.q || 'Q' + (i + 1)) + ' \u2192 ' + (answers[i].choice ? answers[i].choice + (answers[i].typed ? ' \u00b7 ' + answers[i].typed : '') : answers[i].typed)).join('\n');
+    const slots = steps.map((x, i) => answers[i].typed ? x.querySelector('.qf') : null).filter(Boolean);
+    qa.classList.add('answered'); slots.forEach((f) => f.classList.add('on'));
+    try {
+      const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(chatUi.cur), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error([j.error, j.hint].filter(Boolean).join(' \u2014 ') || String(r.status));
+    } catch (e) { qa.classList.remove('answered'); slots.forEach((f) => f.classList.remove('on')); chatAppend({ t: 'error', text: 'Send failed \u2014 ' + (e && e.message ? e.message : e), at: new Date().toISOString() }); }
   }
   async function chatSubmit() {
     if (!chatTa) return;
