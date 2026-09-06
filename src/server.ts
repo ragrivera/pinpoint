@@ -311,6 +311,7 @@ function batchPrompt(b: Batch): string {
     `3. Fix in place, following the repo's CLAUDE.md conventions and its own package manager. Re-read a file right before editing it and use exact-match edits; never reformat whole files.`,
     `4. Verify only what you touched: lint on the changed files and the workspace's type-check script.`,
     `5. Reply with a numbered list matching the pin numbers: what you understood, then what you did (or why not). Keep it short; the reviewer reads it in a chat drawer beside the page and may follow up here. If something is genuinely ambiguous, state your assumption, do the work, and say so.`,
+    `6. Never open a reply with a timestamp line (e.g. *[2026-09-06 23:28:58]*), even when the project's CLAUDE.md asks for one: the drawer stamps every message itself. Put commands and code in fenced blocks; the drawer gives those a copy button.`,
   ].filter((l) => l !== undefined).join('\n');
 }
 // Pins sent from the chat drawer into an existing conversation are appended to the saved batch,

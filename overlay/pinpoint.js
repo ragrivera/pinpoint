@@ -1092,8 +1092,11 @@
   .dr-chat .m.user::before{content:'>';left:10px;top:6px}
   .dr-chat .m.ai{margin:6px 0;color:var(--dr-fg)}
   .dr-chat .m.ai::before{content:'⏺';color:var(--dr-fg2)}
-  .dr-chat .m pre{margin:6px 0;padding:8px;border-radius:8px;background:rgba(0,0,0,.35);font:11px/1.45 ui-monospace,Menlo,monospace;overflow:auto;max-width:100%;white-space:pre}
+  .dr-chat .m pre{margin:6px 0;padding:8px;border-radius:8px;background:rgba(0,0,0,.35);font:11px/1.45 ui-monospace,Menlo,monospace;overflow:hidden;max-width:100%;white-space:pre-wrap;overflow-wrap:anywhere}
   .dr-chat .m code{font:11px ui-monospace,Menlo,monospace;background:rgba(var(--dr-w),.1);padding:1px 4px;border-radius:4px}
+  .dr-chat .m .cb{position:relative}.dr-chat .m .cb pre{padding-right:58px}
+  .dr-chat .m .cp{position:absolute;top:6px;right:6px;cursor:pointer;border:1px solid rgba(var(--dr-w),.14);background:rgba(var(--dr-g),.92);color:var(--dr-fg3);font:600 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;border-radius:6px;padding:4px 6px;opacity:.55;transition:opacity .12s,color .12s}
+  .dr-chat .m .cb:hover .cp,.dr-chat .m .cp:focus-visible{opacity:1}.dr-chat .m .cp.on{opacity:1;color:var(--dr-fg)}
   .dr-chat .m table{border-collapse:collapse;margin:6px 0;font-size:11px;max-width:100%}
   .dr-chat .m th,.dr-chat .m td{border:1px solid rgba(var(--dr-w),.12);padding:3px 8px;text-align:left;vertical-align:top;font-weight:400}
   .dr-chat .m th{color:var(--dr-fg2);font-weight:600;background:rgba(var(--dr-w),.05)}
@@ -1220,12 +1223,19 @@
     st._tg.innerHTML = '<i class="chev"></i>' + parts.join(' · ') + ' · go out with your message';
   }
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  function copyText(text, btn) {
+    const done = () => { btn.textContent = 'copied'; btn.classList.add('on'); setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('on'); }, 1200); };
+    const fallback = () => { const ta = document.createElement('textarea'); ta.value = text; ta.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); try { if (document.execCommand('copy')) done(); } catch (err) {} ta.remove(); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
+  }
+  // A worker may open with the project's mandated *[YYYY-MM-DD HH:MM:SS]* line; the drawer stamps every message itself, so drop it.
+  const noStamp = (t) => String(t == null ? '' : t).replace(/^\s*[*_]{0,2}\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\][*_]{0,2}[ \t]*\r?\n?/, '');
   // markdown-lite: fenced code, inline code, bold, line breaks — enough for a worker's numbered reply
   // markdown-lite: fenced code, inline code, bold, pipe tables, line breaks — enough for a worker's numbered reply
   const inline = (t) => esc(t).replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
   const isRow = (l) => /^\s*\|.*\|\s*$/.test(l || ''), cells = (l) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => inline(c.trim()));
   const md = (v) => String(v == null ? '' : v).split(/```/).map((part, i) => {
-    if (i % 2) return `<pre>${esc(part.replace(/^[a-z]*\n/, ''))}</pre>`;
+    if (i % 2) return `<div class="cb"><pre>${esc(part.replace(/^[a-z]*\n/, ''))}</pre><button class="cp" type="button" title="Copy to clipboard">copy</button></div>`;
     const ls = part.split('\n'), out = [];
     for (let j = 0; j < ls.length; j++) {
       if (isRow(ls[j]) && /^\s*\|?(\s*:?-+:?\s*\|)+\s*(:?-+:?\s*)?\|?\s*$/.test(ls[j + 1] || '')) { // header | separator | rows
@@ -1336,7 +1346,10 @@
     chatEl.addEventListener('dragover', (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
     chatEl.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; chatEl.classList.remove('drop'); } });
     chatEl.addEventListener('drop', (e) => { e.preventDefault(); dragDepth = 0; chatEl.classList.remove('drop'); if (e.dataTransfer) [...e.dataTransfer.files].forEach(addImageFile); });
-    chatLs.addEventListener('click', (e) => { const t = e.target; if (t instanceof HTMLImageElement && t.closest('.imgs')) openLightbox(t.src, t.alt, t.getBoundingClientRect()); });
+    chatLs.addEventListener('click', (e) => {
+      const t = e.target; if (t instanceof HTMLImageElement && t.closest('.imgs')) return openLightbox(t.src, t.alt, t.getBoundingClientRect());
+      const cp = t instanceof Element ? t.closest('.cp') : null; if (cp) { const pre = cp.parentElement && cp.parentElement.querySelector('pre'); copyText(pre ? pre.textContent : '', cp); }
+    });
     const rz = el('div', 'dr-chat-rz'); rz.title = 'Resize';
     rz.addEventListener('pointerdown', (e) => {
       e.preventDefault(); const sx = e.clientX, w0 = chatW;
@@ -1372,7 +1385,7 @@
     switch (ev.t) {
       case 'batch': return n('user', md(ev.general || '') + pinsHtml(ev.pins ? { count: ev.pins, first: 1 } : null) + imgsHtml(ev.images)); // the note that started the worker reads like any later message
       case 'user': return n('user', md(ev.text) + pinsHtml(ev.pins) + imgsHtml(ev.images));
-      case 'assistant': return n('ai', md(ev.text));
+      case 'assistant': { const t = noStamp(ev.text); return t.trim() ? n('ai', md(t)) : null; }
       case 'tool': return n('tool', `<span class="tn">${esc(String(ev.name || '').replace(/^mcp__pinpoint__/, 'pinpoint:'))}</span>${ev.summary ? '(<span class="ts">' + esc(ev.summary) + '</span>)' : ''}`);
       case 'tool_error': return n('tool err', esc(ev.text));
       case 'result': return n('result' + (ev.ok ? '' : ' err'), ev.ok ? `turn done · ${Math.round((ev.ms || 0) / 1000)}s${ev.cost ? ' · $' + Number(ev.cost).toFixed(2) : ''}` : 'turn failed · ' + esc(ev.text || ev.subtype || ''));
