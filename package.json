@@ -1,0 +1,47 @@
+{
+  "name": "pinpoint-live",
+  "version": "0.3.0",
+  "description": "Pin elements on your running React app, send them to Claude Code, and get the source fixed in place — with a headless worker and a chat drawer per batch.",
+  "type": "module",
+  "license": "MIT",
+  "repository": "github:ragrivera/pinpoint",
+  "keywords": ["claude-code", "mcp", "vite-plugin", "react", "design-review", "annotation", "overlay"],
+  "bin": {
+    "pinpoint": "./bin/pinpoint.ts"
+  },
+  "exports": {
+    "./vite": {
+      "types": "./src/vite.d.ts",
+      "default": "./src/vite.js"
+    },
+    "./react": {
+      "types": "./src/react.d.ts",
+      "default": "./src/react.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["bin", "src", "overlay", "skill", "README.md", "LICENSE"],
+  "engines": {
+    "bun": ">=1.1"
+  },
+  "scripts": {
+    "test": "bun test",
+    "type-check": "tsc --noEmit",
+    "serve": "bun bin/pinpoint.ts serve"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "vite": ">=4"
+  },
+  "peerDependenciesMeta": {
+    "react": { "optional": true },
+    "vite": { "optional": true }
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "@types/react": "^19.0.0",
+    "react": "^19.0.0",
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0"
+  }
+}
