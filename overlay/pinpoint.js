@@ -15,7 +15,7 @@
   const TYPES = ['bug', 'layout', 'copy', 'idea', 'question'];
   const state = { on: false, pins: [], general: '', drag: null, editing: null, panelPos: null, collapsed: true, size: { w: 296, h: null }, popSize: { w: 320, h: null } };
   // pinpoint chat drawer (module near the end): while open, the floating panel yields to it
-  let chatOpen = false, chatW = 420, chatEl = null, chatScale = 1, chatSlashKey = null, chatLb = null;
+  let chatOpen = false, chatW = 420, chatEl = null, chatScale = 1, chatSlashKey = null, chatLb = null, chatMenuClose = null;
   try {
     const s = JSON.parse(localStorage.getItem(KEY) || 'null');
     if (s) { state.pins = s.pins || []; state.general = s.general || ''; state.panelPos = s.panelPos || null; state.collapsed = s.collapsed !== false; state.size = s.size || state.size; state.popSize = s.popSize || state.popSize; }
@@ -656,6 +656,7 @@
     // textareas or the panel's general note. Handled HERE because this capture
     // listener stopPropagation()s overlay keystrokes before they can reach any
     // handler on the textareas themselves.
+    if (chatMenuClose && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); chatMenuClose(); return; } // the conversation menu closes before anything else reacts to Esc
     if (chatLb) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); chatLb(); } return; } // the image lightbox owns the keyboard while it is up
     if (chatOpen && e.target instanceof Element && e.target.closest('.dr-chat')) {
       if (chatSlashKey && chatSlashKey(e)) return; // the "/" picker owns ↑ ↓ Enter Tab Esc while it is open
@@ -1038,6 +1039,7 @@
   });
   document.addEventListener('pointerdown', (e) => {
     if (flyOpen && e.target instanceof Element && !e.target.closest('.dr-dock,.dr-dock-fly')) { flyOpen = false; renderHub(); }
+    if (chatMenuClose && e.target instanceof Element && !e.target.closest('.dr-chat-sel')) chatMenuClose();
   }, true);
   window.addEventListener('resize', () => { placeDock(); placePanel(); snPlace(); });
   dockReady = true; renderHub();
@@ -1058,7 +1060,7 @@
   let chatHover = false, chatOpacity = 1, chatHoverOpacity = 1, chatBlur = 22;
   const chatApply = () => {
     if (!chatEl) return;
-    chatEl.style.opacity = chatHover ? chatHoverOpacity : chatOpacity;
+    chatEl.style.opacity = chatHover || chatLb ? chatHoverOpacity : chatOpacity; // an open lightbox keeps the hovered look: the pointer is on the lightbox, not the drawer
     chatEl.style.backdropFilter = chatEl.style.webkitBackdropFilter = `blur(${chatBlur}px) saturate(150%)`;
     const sc = chatScale === 1 ? '' : `scale(${chatScale})`;
     chatEl.style.transform = chatOpen ? sc || 'none' : 'translateX(calc(100% + 30px)) ' + sc; // 'none' beats the stylesheet's closed-state translate at size 1
@@ -1077,8 +1079,19 @@
   .dr-chat-hd b .sub{color:var(--dr-fg3b);font-weight:500}
   .dr-chat-hd .r{display:flex;align-items:center;gap:6px}
   .dr-chat-bar{display:flex;gap:6px;align-items:center;padding:8px 12px;border-bottom:1px solid rgba(var(--dr-w),.07)}
-  .dr-chat-sel{flex:1;min-width:0;padding:6px 8px;border-radius:8px;border:1px solid rgba(var(--dr-w),.12);background:rgba(var(--dr-w),.05);color:var(--dr-fg);font:12px system-ui,sans-serif}
-  .dr-chat-sel option{color:#111}
+  .dr-chat-sel{flex:1;min-width:0;position:relative}
+  .dr-chat-sel .tg{width:100%;display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;border:1px solid rgba(var(--dr-w),.12);background:rgba(var(--dr-w),.05);color:var(--dr-fg);font:12px/1.4 ui-monospace,Menlo,monospace;cursor:pointer;text-align:left}
+  .dr-chat-sel .tg:hover,.dr-chat-sel.open .tg{background:rgba(var(--dr-w),.09)}
+  .dr-chat-sel .lb{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dr-chat-sel .st{flex:none;font:600 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--dr-fg3b)}
+  .dr-chat-sel .st.working,.dr-chat-sel .st.starting{color:#ffb457}.dr-chat-sel .st.idle{color:#39d98a}.dr-chat-sel .st.error{color:#ff8a8e}
+  .dr-chat-sel .chev{flex:none;display:inline-block;width:5px;height:5px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-2px) rotate(45deg);color:var(--dr-fg3);transition:transform .22s cubic-bezier(.22,.61,.36,1)}
+  .dr-chat-sel.open .chev{transform:translateY(1px) rotate(225deg)}
+  .dr-chat-sel .menu{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:2;max-height:280px;overflow-y:auto;background:rgba(var(--dr-g),.97);border:1px solid rgba(var(--dr-w),.12);border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,.4);padding:4px;scrollbar-width:thin;scrollbar-color:rgba(var(--dr-w),.18) transparent}
+  .dr-chat-sel .it{display:grid;grid-template-columns:12px 1fr auto;gap:8px;align-items:center;padding:6px 8px;border-radius:6px;cursor:pointer;color:var(--dr-fg);font:12px/1.4 ui-monospace,Menlo,monospace}
+  .dr-chat-sel .it:hover{background:rgba(var(--dr-w),.08)}.dr-chat-sel .it.new{color:var(--dr-fg3b)}.dr-chat-sel .it.dis{opacity:.6;cursor:default}
+  .dr-chat-sel .it .ck{color:#39d98a;font-size:11px;text-align:center}
+  @media (prefers-reduced-motion:reduce){.dr-chat-sel .chev{transition:none}}
   .dr-chat-stop{flex:none;width:30px;height:30px;display:grid;place-items:center;border:1px solid rgba(255,90,95,.35);background:rgba(255,90,95,.1);border-radius:999px;padding:0;cursor:pointer}
   .dr-chat-stop::before{content:'';width:9px;height:9px;border-radius:2px;background:#ff8a8e}
   .dr-chat-stop:hover{background:rgba(255,90,95,.22)}
@@ -1262,7 +1275,13 @@
     const x = el('button', 'dr-fp-min', '×'); x.title = 'Close chat (Esc) — the panel comes back'; x.onclick = closeChat;
     r.append(ann, nw, x); hd.append(ttl, r);
     const bar = el('div', 'dr-chat-bar');
-    chatSel = el('select', 'dr-chat-sel'); chatSel.onchange = () => selectConvo(chatSel.value || null);
+    chatSel = el('div', 'dr-chat-sel');
+    const selTg = el('button', 'tg'); selTg.type = 'button'; selTg.title = 'Switch conversation'; selTg.setAttribute('aria-haspopup', 'listbox'); selTg.setAttribute('aria-expanded', 'false');
+    const selMenu = el('div', 'menu'); selMenu.setAttribute('role', 'listbox'); selMenu.style.display = 'none';
+    const menuClose = () => { selMenu.style.display = 'none'; chatSel.classList.remove('open'); selTg.setAttribute('aria-expanded', 'false'); chatMenuClose = null; };
+    selTg.onclick = () => { if (chatMenuClose) { chatMenuClose(); return; } selMenu.style.display = ''; chatSel.classList.add('open'); selTg.setAttribute('aria-expanded', 'true'); chatMenuClose = menuClose; };
+    selMenu.addEventListener('click', (e) => { const it = e.target.closest('.it'); if (!it || it.classList.contains('dis')) return; menuClose(); selectConvo(it.dataset.id || null); });
+    chatSel.append(selTg, selMenu); chatSel._tg = selTg; chatSel._menu = selMenu; selSync(); // placeholder label until the list loads
     chatStopBtn = el('button', 'dr-chat-stop'); chatStopBtn.type = 'button'; chatStopBtn.setAttribute('aria-label', 'Stop the worker'); chatStopBtn.title = 'Stop — end this worker process now (your next message resumes the same session)';
     chatStopBtn.onclick = () => { if (chatUi.cur) fetch(API + BRAND.chat + '/' + encodeURIComponent(chatUi.cur) + '/stop', { method: 'POST' }).catch(() => {}); };
     bar.append(chatSel, chatStopBtn);
@@ -1366,9 +1385,17 @@
     const lb = el('div', 'dr-lb');
     const img = el('img'); img.src = src; img.alt = name || '';
     lb.append(img, el('div', 'cap', `<span>${esc(name || '')}</span><a href="${esc(src)}" target="_blank" rel="noopener">open &#8599;</a>`));
-    const close = () => { if (chatLb === close) chatLb = null; lb.classList.remove('on'); setTimeout(() => lb.remove(), 200); };
+    let lx = from ? from.left + from.width / 2 : -1, ly = from ? from.top + from.height / 2 : -1; // last pointer position: the thumbnail centre until the pointer moves
+    lb.addEventListener('pointermove', (e) => { lx = e.clientX; ly = e.clientY; });
+    const close = () => {
+      if (chatLb === close) chatLb = null;
+      lb.classList.remove('on'); setTimeout(() => lb.remove(), 200);
+      // The drawer never saw the pointer come back (the lightbox was on top), so settle its hover state from where the pointer is now instead of idle-then-hover flicker.
+      if (chatEl) { const r = chatEl.getBoundingClientRect(); chatHover = chatOpen && lx >= r.left && lx <= r.right && ly >= r.top && ly <= r.bottom; }
+      chatApply(); if (chatOpen && chatTa) chatTa.focus({ preventScroll: true });
+    };
     lb.addEventListener('click', (e) => { if (!(e.target instanceof HTMLAnchorElement)) close(); });
-    chatLb = close; document.body.appendChild(lb);
+    chatLb = close; chatApply(); document.body.appendChild(lb);
     // FLIP: start the image at the clicked thumbnail (uniform scale about its centre), then let it glide into place.
     const grow = () => {
       const to = img.getBoundingClientRect(), ok = from && to.width && to.height;
@@ -1416,22 +1443,32 @@
     chatSt.className = 'dr-chat-st ' + (state || '');
     if (chatStopBtn) chatStopBtn.style.display = state === 'working' || state === 'idle' || state === 'starting' ? '' : 'none';
   }
-  const convoLabel = (c) => { let path = c.page; try { path = new URL(c.page).pathname; } catch (e) {} const t = new Date(c.startedAt || c.lastAt); const hh = isNaN(t) ? '' : t.toTimeString().slice(0, 5); return `${hh} ${path} · ${c.pins ? c.pins + ' pin' + (c.pins === 1 ? '' : 's') : 'note'} · ${c.state}`; };
+  const convoParts = (c) => { let path = c.page; try { path = new URL(c.page).pathname; } catch (e) {} const t = new Date(c.startedAt || c.lastAt); const hh = isNaN(t) ? '' : t.toTimeString().slice(0, 5); return { lb: `${hh} ${path}`, pins: c.pins ? c.pins + ' pin' + (c.pins === 1 ? '' : 's') : 'note', st: String(c.state || '') }; };
+  const convoHtml = (c) => { const p = convoParts(c); return `<span class="lb">${esc(p.lb)} &middot; ${esc(p.pins)}</span><span class="st ${esc(p.st)}">${esc(p.st)}</span>`; };
+  const newConvoHtml = () => `<span class="lb">${chatConvos.length ? 'New conversation&#8230;' : 'No worker yet &#8212; type below to start one'}</span>`;
   function fillConvos() {
     if (!chatSel) return;
     const sig = JSON.stringify(chatConvos.map((c) => [c.id, c.state]));
-    if (chatSel.dataset.sig === sig) { chatSel.value = chatUi.cur || ''; return; }
-    chatSel.dataset.sig = sig; chatSel.innerHTML = '';
-    const o0 = document.createElement('option'); o0.value = ''; o0.textContent = chatConvos.length ? 'New conversation…' : 'No worker yet — type below to start one'; chatSel.append(o0);
-    chatConvos.forEach((c) => { const o = document.createElement('option'); o.value = c.id; o.textContent = convoLabel(c); chatSel.append(o); });
-    chatSel.value = chatUi.cur && chatConvos.some((c) => c.id === chatUi.cur) ? chatUi.cur : '';
+    if (chatSel.dataset.sig !== sig) {
+      chatSel.dataset.sig = sig; chatSel._menu.innerHTML = '';
+      const it0 = el('div', 'it new' + (chatConvos.length ? '' : ' dis'), '<span class="ck"></span>' + newConvoHtml()); it0.dataset.id = ''; it0.setAttribute('role', 'option'); chatSel._menu.append(it0);
+      chatConvos.forEach((c) => { const it = el('div', 'it', '<span class="ck"></span>' + convoHtml(c)); it.dataset.id = c.id; it.setAttribute('role', 'option'); chatSel._menu.append(it); });
+    }
+    selSync();
+  }
+  // Mirror the current conversation onto the trigger and the menu's check mark.
+  function selSync() {
+    if (!chatSel) return;
+    const cur = chatUi.cur ? chatConvos.find((c) => c.id === chatUi.cur) : null;
+    chatSel._tg.innerHTML = (cur ? convoHtml(cur) : newConvoHtml()) + '<i class="chev"></i>';
+    chatSel._menu.querySelectorAll('.it').forEach((it) => { const on = (it.dataset.id || '') === (cur ? cur.id : ''); it.setAttribute('aria-selected', String(on)); it.querySelector('.ck').innerHTML = on ? '&#10003;' : ''; });
   }
   async function loadConvos() { try { const r = await fetch(API + BRAND.chat); chatConvos = r.ok ? await r.json() : []; } catch (e) { chatConvos = []; } fillConvos(); }
   function selectConvo(id) {
     if (chatEs) { chatEs.close(); chatEs = null; }
     chatUi.cur = id || null; chatSave();
     if (!chatLs) return;
-    chatLs.innerHTML = ''; chatAtBottom = true; if (chatSel) chatSel.value = id || '';
+    chatLs.innerHTML = ''; chatAtBottom = true; selSync();
     if (!id) { chatStatus(null); chatAppend({ t: 'error', text: '' }); chatLs.innerHTML = ''; const d = el('div', 'm status'); d.innerHTML = 'A message here starts a new worker for this page (sent as a general note). Pins you place while the drawer is open are listed above the box and go out with it.'; chatLs.append(d); return; }
     chatStatus('connecting');
     chatEs = new EventSource(API + BRAND.chat + '/' + encodeURIComponent(id) + '/events');
