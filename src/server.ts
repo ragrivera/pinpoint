@@ -328,12 +328,26 @@ function appendPins(id: string, raw: unknown): PinAppend {
   writeFileSync(f, JSON.stringify(b, null, 2));
   return { first, count: list.length, total: b.pins.length, rows: pinRows(list, first - 1) };
 }
+// /clear forgets the batch's pins as well (Robin, 2026-09-07): the next pins from the drawer start at
+// #1 again and the progress card / conversation picker stop counting the forgotten ones. The general
+// note stays as the batch's origin record; the chat.jsonl still holds the old pins' text. Returns how
+// many pins were dropped.
+function resetPins(id: string): number {
+  const f = findSaved(id); if (!f) return 0;
+  const b = JSON.parse(readFileSync(f, 'utf8')) as Batch;
+  const n = b.pins.length;
+  if (n || b.progress) { b.pins = []; delete b.progress; writeFileSync(f, JSON.stringify(b, null, 2)); }
+  return n;
+}
 function followUpPrompt(text: string, id: string, a: PinAppend): string {
   const last = a.first + a.count - 1;
+  const range = `#${a.first}${a.count > 1 ? '–#' + last : ''}`;
+  // first === 1: the batch had no pins before (note-only start, or /clear forgot them) — nothing to number on from.
+  const where = a.first === 1 ? `the first pin${a.count === 1 ? '' : 's'} of batch ${id} in this conversation (${a.total} in total)` : `added to batch ${id}, numbered on from the originals (now ${a.total} in total)`;
   return [
     text,
     ``,
-    `${a.count} new pin${a.count === 1 ? '' : 's'} (#${a.first}${a.count > 1 ? '–#' + last : ''}) added to batch ${id}, numbered on from the originals (now ${a.total} in total). Treat them like the first batch: resolve each to source, report_pin { id: "${id}", pin: N, status } ("working", then "done" / "skipped" / "question"), fix in place, verify what you touched, and reply by pin number.`,
+    `${a.count} new pin${a.count === 1 ? '' : 's'} (${range}), ${where}. Treat them like the first batch: resolve each to source, report_pin { id: "${id}", pin: N, status } ("working", then "done" / "skipped" / "question"), fix in place, verify what you touched, and reply by pin number.`,
     JSON.stringify(a.rows, null, 2),
   ].join('\n');
 }
@@ -452,7 +466,7 @@ class Worker {
         }
         break;
       case 'conversation_reset': // /clear — the next system/init carries the new session id, which is the one --resume needs
-        this.emit({ t: 'status', state: this.rec.state, reset: true });
+        this.emit({ t: 'status', state: this.rec.state, reset: true, pins: resetPins(this.rec.batchId) }); // pins: how many the batch forgot with it
         break;
       case 'assistant':
         for (const c of m.message?.content ?? []) {

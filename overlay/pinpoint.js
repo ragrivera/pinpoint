@@ -404,6 +404,14 @@
     if (!b) { b = { id, page: location.pathname }; snBatches.push(b); }
     b.total = total; b.done = false; b.at = Date.now(); snSave(); if (snHidden) snSetHidden(false); snTrack(b);
   }
+  // /clear also empties the batch's pins on the server (the next ones start at #1 again): drop the
+  // progress card that counted the forgotten ones. Only a card tracked before the reset goes — the
+  // event replays on reload, and a card re-tracked by pins sent after the clear must survive it.
+  function snForget(id, at) {
+    const b = id ? snBatches.find((x) => x.id === id) : null; if (!b || (at && b.at > at)) return;
+    const t = snLs.querySelector('.t[data-id="' + CSS.escape(id) + '"]'); if (t) { if (t._stop) t._stop(); snRemove(t); }
+    snDrop(id);
+  }
   snBatches = snBatches.filter((b) => Date.now() - b.at < 6 * 3600 * 1000);
   { const fin = snBatches.filter((b) => b.done); if (fin.length > 8) { const cut = new Set(fin.sort((x, y) => x.at - y.at).slice(0, fin.length - 8).map((b) => b.id)); snBatches = snBatches.filter((b) => !cut.has(b.id)); } } // keep the 8 most recent finished cards
   snSave();
@@ -1543,7 +1551,7 @@
       case 'tool_error': return n('tool err', esc(ev.text));
       case 'result': return n('result' + (ev.ok ? '' : ' err'), ev.ok ? `turn done · ${Math.round((ev.ms || 0) / 1000)}s${ev.cost ? ' · $' + Number(ev.cost).toFixed(2) : ''}` : 'turn failed · ' + esc(ev.text || ev.subtype || ''));
       case 'status':
-        if (ev.reset) return n('status', 'conversation cleared — the worker starts from a blank context');
+        if (ev.reset) return n('status', 'conversation cleared — the worker starts from a blank context' + (ev.pins ? ' \u00b7 ' + ev.pins + ' pin' + (ev.pins === 1 ? '' : 's') + ' forgotten, the next ones start at #1' : ''));
         if (ev.compacted) return n('status', 'context compacted' + (ev.pre ? ' · ' + (ev.pre / 1000).toFixed(1) + 'k → ' + (ev.post / 1000).toFixed(1) + 'k tokens' : ''));
         if (ev.stopping) return n('status', 'worker stopping — ' + esc(ev.stopping));
         if (ev.state === 'starting') return n('status', ev.resume ? 'resuming the worker session…' : 'starting a worker…');
@@ -1577,7 +1585,7 @@
   }
   function chatAppend(ev) {
     if (!chatLs) return; if (ev.t === 'user') lockQuestions(ev.text); const node = chatLine(ev); if (!node) return;
-    if (ev.t === 'status' && ev.reset) { chatLs.innerHTML = ''; chatAtBottom = true; } // /clear wipes the drawer transcript as well: live, and on replay so a reload stays cleared
+    if (ev.t === 'status' && ev.reset) { chatLs.innerHTML = ''; chatAtBottom = true; snForget(chatUi.cur, Date.parse(ev.at)); } // /clear wipes the drawer transcript and the batch's pins: live, and on replay so a reload stays cleared
     if (ev.t === 'tool_error') { const last = [...chatLs.querySelectorAll('.m.tool:not(.err)')].pop(); if (last) last.classList.add('failed'); } // the failed call's dot turns red
     chatLs.appendChild(node); if (chatAtBottom) chatLs.scrollTop = chatLs.scrollHeight;
   }

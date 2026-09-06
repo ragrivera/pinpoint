@@ -73,7 +73,7 @@ All `/api/*` routes check `Origin`: allowed are the origins in `.pinpoint.json` 
 | `GET /api/skills` | skills + commands a worker can run (`~/.claude` and `<root>/.claude`, plus `/clear`, `/compact`) |
 | `GET /api/chat` | worker conversations, newest first |
 | `GET /api/chat/:id/events` | SSE: transcript replay, then live events |
-| `POST /api/chat/:id` | `{ text?, images?, pins? }` → to the worker (pins are appended to the batch, numbered on) |
+| `POST /api/chat/:id` | `{ text?, images?, pins? }` → to the worker (pins are appended to the batch, numbered on; a `/clear` text empties the batch's pins so the next ones start at #1 again) |
 | `POST /api/chat/:id/stop` | end the worker process (a later message resumes the session) |
 | `GET /api/chat/:id/img/:file` | a screenshot from the transcript |
 
