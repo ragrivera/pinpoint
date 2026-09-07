@@ -176,6 +176,8 @@ bun run type-check
 `overlay/pinpoint.js` is dependency-free vanilla JS; `src/server.ts` is a single-file Bun program with no
 MCP SDK (the JSON-RPC surface it needs is ~60 lines). Edits to the overlay are served live — no restart.
 
+CI (`.github/workflows/ci.yml`) runs the same two checks on every pull request and on pushes to `main`.
+
 ## License
 
 MIT
