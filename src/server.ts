@@ -542,6 +542,17 @@ class Worker {
     this.emit({ t: 'status', state: this.rec.state, closed: true });
     log(`worker ${this.rec.workerId} closed ${this.rec.batchId}`);
   }
+  /** Continue in a terminal: end the process (if any) and post the `claude --resume` command for this conversation's
+   *  Claude session into the transcript (persisted, so it survives a reload). One process per session — once a
+   *  terminal has it, a message here would resume the same session under a new worker. */
+  handoff(): { command: string; cwd: string; session: string } {
+    this.stop('handed off to a terminal');
+    const cwd = /^[\w./-]+$/.test(ROOT) ? ROOT : `'${ROOT.replace(/'/g, "'\\''")}'`;
+    const h = { command: `cd ${cwd} && claude --resume ${this.rec.sessionUuid}`, cwd: ROOT, session: this.rec.sessionUuid };
+    this.emit({ t: 'status', state: this.rec.state, handoff: true, ...h });
+    log(`worker ${this.rec.workerId} handed off ${this.rec.batchId} to a terminal (${this.rec.sessionUuid})`);
+    return h;
+  }
 }
 // Workers load only this MCP (fast start, no unrelated servers) unless worker.mcp = "all".
 function writeWorkerMcpCfg() { mkdirSync(WORKERS_DIR, { recursive: true }); writeFileSync(WORKER_MCP_CFG, JSON.stringify({ mcpServers: { pinpoint: { command: process.execPath, args: [import.meta.path], env: { PINPOINT_ROOT: ROOT } } } }, null, 2)); }
@@ -560,7 +571,7 @@ function listChats() {
   return [...workers.values()].sort((a, b) => (a.rec.lastAt < b.rec.lastAt ? 1 : -1)).map((w) => {
     let pins = 0, general = '';
     try { const f = findSaved(w.rec.batchId); if (f) { const b = JSON.parse(readFileSync(f, 'utf8')) as Batch; pins = b.pins.length; general = (b.general || '').slice(0, 120); } } catch {}
-    return { id: w.rec.batchId, page: w.rec.page, title: w.rec.title, state: w.rec.state, startedAt: w.rec.startedAt, lastAt: w.rec.lastAt, turns: w.rec.turns, costUsd: Math.round(w.rec.costUsd * 1000) / 1000, pins, general };
+    return { id: w.rec.batchId, page: w.rec.page, title: w.rec.title, state: w.rec.state, session: w.rec.sessionUuid, startedAt: w.rec.startedAt, lastAt: w.rec.lastAt, turns: w.rec.turns, costUsd: Math.round(w.rec.costUsd * 1000) / 1000, pins, general };
   });
 }
 function sse(w: Worker, req: Request, headers: Record<string, string>) {
@@ -619,7 +630,7 @@ try {
         return Response.json({ ok: true }, { headers: CORS });
       }
       if (url.pathname === '/api/chat' && req.method === 'GET') return Response.json(listChats(), { headers: CORS });
-      const cm = /^\/api\/chat\/([^/]+)(?:\/(events|stop|close)|\/img\/([^/]+))?$/.exec(url.pathname);
+      const cm = /^\/api\/chat\/([^/]+)(?:\/(events|stop|close|handoff)|\/img\/([^/]+))?$/.exec(url.pathname);
       if (cm) {
         const id = decodeURIComponent(cm[1]);
         const w = workers.get(id);
@@ -633,6 +644,7 @@ try {
         if (cm[2] === 'events' && req.method === 'GET') return sse(w, req, CORS);
         if (cm[2] === 'stop' && req.method === 'POST') { w.stop('stopped from the overlay'); return Response.json({ ok: true }, { headers: CORS }); }
         if (cm[2] === 'close' && req.method === 'POST') { w.close('closed from the overlay'); return Response.json({ ok: true }, { headers: CORS }); }
+        if (cm[2] === 'handoff' && req.method === 'POST') return Response.json({ ok: true, ...w.handoff() }, { headers: CORS });
         if (!cm[2] && req.method === 'POST') {
           const j = await req.json().catch(() => ({}));
           const text = String(j?.text ?? '').trim();

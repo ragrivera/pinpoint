@@ -1187,6 +1187,8 @@
   .dr-chat-stop{flex:none;width:30px;height:30px;display:grid;place-items:center;border:1px solid rgba(255,90,95,.35);background:rgba(255,90,95,.1);border-radius:999px;padding:0;cursor:pointer}
   .dr-chat-stop::before{content:'';width:9px;height:9px;border-radius:2px;background:#ff8a8e}
   .dr-chat-stop:hover{background:rgba(255,90,95,.22)}
+  .dr-chat-term{flex:none;height:30px;padding:0 9px;display:grid;place-items:center;border:1px solid rgba(var(--dr-w),.14);background:rgba(var(--dr-w),.06);border-radius:999px;cursor:pointer;color:var(--dr-fg3);font:700 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.04em}
+  .dr-chat-term:hover{background:rgba(var(--dr-w),.12);color:var(--dr-fg)}.dr-chat-term:disabled{opacity:.5;cursor:default}
   .dr-chat-ls{flex:1 1 auto;min-height:0;overflow-y:auto;padding:12px 14px 10px;display:flex;flex-direction:column;gap:2px;background:rgba(0,0,0,.16);font:12px/1.55 ui-monospace,Menlo,SFMono-Regular,monospace;scrollbar-width:thin;scrollbar-color:rgba(var(--dr-w),.18) transparent}
   .dr-chat-ls::-webkit-scrollbar{width:8px}.dr-chat-ls::-webkit-scrollbar-thumb{background:rgba(var(--dr-w),.18);border-radius:4px}
   .dr-chat .m{flex:none;position:relative;align-self:stretch;max-width:100%;padding:2px 0 2px 18px;word-break:break-word;white-space:normal;font-size:12px}
@@ -1233,6 +1235,10 @@
   .dr-chat .m.tool.err::before{content:'⎿';left:18px;color:#ff8a8e}
   .dr-chat .m.status{font-size:11px;color:var(--dr-fg3b)}
   .dr-chat .m.status.err{color:#ff8a8e}
+  .dr-chat .m.status.handoff{display:grid;grid-template-columns:auto 1fr;column-gap:10px;align-items:start;margin:6px 0 6px 18px;padding:9px 12px 10px 10px;border-radius:10px;background:rgba(var(--dr-w),.05);border:1px solid rgba(var(--dr-w),.1)}
+  .dr-chat .m.status.handoff .hi{grid-row:1/3;width:26px;height:26px;display:grid;place-items:center;border-radius:7px;background:rgba(var(--dr-w),.08);color:var(--dr-fg);font:700 11px/1 ui-monospace,Menlo,monospace}
+  .dr-chat .m.status.handoff b{color:var(--dr-fg);font-weight:600;font-size:12px;line-height:1.3}
+  .dr-chat .m.status.handoff .sub{display:block;margin-top:3px;color:var(--dr-fg3b);line-height:1.5}
   .dr-chat .m.result{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--dr-fg3);margin-bottom:6px}
   .dr-chat .m.result.err{color:#ff8a8e;text-transform:none}
   .dr-chat .m kbd{font:10px ui-monospace,Menlo,monospace;background:rgba(var(--dr-w),.08);border:1px solid rgba(var(--dr-w),.14);border-radius:4px;padding:1px 5px}
@@ -1295,7 +1301,7 @@
   .dr-lb .cap{display:flex;gap:14px;align-items:center;font:11px ui-monospace,Menlo,monospace;color:rgba(255,255,255,.7);cursor:default}
   .dr-lb .cap a{color:#fff;text-decoration:none;padding:3px 9px;border-radius:999px;background:rgba(255,255,255,.12)}.dr-lb .cap a:hover{background:rgba(255,255,255,.22)}
   @media (prefers-reduced-motion:reduce){.dr-lb,.dr-lb img{transition:none}}`;
-  let chatLs = null, chatTa = null, chatSel = null, chatSt = null, chatSendBtn = null, chatStopBtn = null, chatEs = null, chatConvos = [], chatPoll = null, chatAtBottom = true;
+  let chatLs = null, chatTa = null, chatSel = null, chatSt = null, chatSendBtn = null, chatStopBtn = null, chatTermBtn = null, chatEs = null, chatConvos = [], chatPoll = null, chatAtBottom = true;
   let chatAtt = null, chatFiles = []; // pending screenshots: { name, type, data (base64), preview (data URL), w, h }
   const IMG_MAX_EDGE = 1600, IMG_MAX = 6;
   const imgsHtml = (imgs) => Array.isArray(imgs) && imgs.length ? `<div class="imgs">${imgs.map((i) => `<img src="${esc(API + i.url)}" alt="${esc(i.name || '')}" title="${esc(i.name || '')}">`).join('')}</div>` : '';
@@ -1432,7 +1438,9 @@
     chatSel.append(selTg, selMenu); chatSel._tg = selTg; chatSel._menu = selMenu; selSync(); // placeholder label until the list loads
     chatStopBtn = el('button', 'dr-chat-stop'); chatStopBtn.type = 'button'; chatStopBtn.setAttribute('aria-label', 'Stop the worker'); chatStopBtn.title = 'Stop — end this worker process now (your next message resumes the same session)';
     chatStopBtn.onclick = () => { if (chatUi.cur) fetch(API + BRAND.chat + '/' + encodeURIComponent(chatUi.cur) + '/stop', { method: 'POST' }).catch(() => {}); };
-    bar.append(chatSel, chatStopBtn);
+    chatTermBtn = el('button', 'dr-chat-term', '&gt;_'); chatTermBtn.type = 'button'; chatTermBtn.setAttribute('aria-label', 'Continue in a terminal'); chatTermBtn.title = 'Continue in a terminal — copies the claude --resume command for this conversation and ends the worker';
+    chatTermBtn.onclick = () => handoffConvo();
+    bar.append(chatSel, chatTermBtn, chatStopBtn); loadRoot();
     chatLs = el('div', 'dr-chat-ls'); chatLs.addEventListener('scroll', () => { chatAtBottom = chatLs.scrollHeight - chatLs.scrollTop - chatLs.clientHeight < 40; });
     if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => { if (chatAtBottom) chatLs.scrollTop = chatLs.scrollHeight; }).observe(chatLs); // stay pinned when the hint / textarea change the pane's height
     chatSt = el('div', 'dr-chat-st', '');
@@ -1572,6 +1580,7 @@
       case 'status':
         if (ev.reset) return n('status', 'conversation cleared — the worker starts from a blank context' + (ev.pins ? ' \u00b7 ' + ev.pins + ' pin' + (ev.pins === 1 ? '' : 's') + ' forgotten, the next ones start at #1' : ''));
         if (ev.compacted) return n('status', 'context compacted' + (ev.pre ? ' · ' + (ev.pre / 1000).toFixed(1) + 'k → ' + (ev.post / 1000).toFixed(1) + 'k tokens' : ''));
+        if (ev.handoff) return n('status handoff', '<span class="hi" aria-hidden="true">&gt;_</span><b>Handed off to a terminal</b><span class="sub">The resume command is on your clipboard — paste it in a terminal to carry this session on there. A message here starts a new worker on the same session.</span>');
         if (ev.stopping) return n('status', 'worker stopping — ' + esc(ev.stopping));
         if (ev.state === 'starting') return n('status', ev.resume ? 'resuming the worker session…' : 'starting a worker…');
         if (ev.ready) return n('status', 'worker ready' + (ev.model ? ' · ' + esc(ev.model) : ''));
@@ -1625,6 +1634,7 @@
     chatSt.textContent = state ? map[state] || state : '';
     chatSt.className = 'dr-chat-st ' + (state || '');
     if (chatStopBtn) chatStopBtn.style.display = state === 'working' || state === 'idle' || state === 'starting' ? '' : 'none';
+    if (chatTermBtn) chatTermBtn.style.display = state ? '' : 'none';
   }
   const convoParts = (c) => { let path = c.page; try { path = new URL(c.page).pathname; } catch (e) {} const t = new Date(c.startedAt || c.lastAt); const hh = isNaN(t) ? '' : t.toTimeString().slice(0, 5); return { lb: `${hh} ${path}`, pins: c.pins ? c.pins + ' pin' + (c.pins === 1 ? '' : 's') : 'note', st: String(c.state || '') }; };
   const convoHtml = (c) => { const p = convoParts(c), nm = chatUi.names && chatUi.names[c.id]; return `<span class="lb"${nm ? ` title="${esc(p.lb)}"` : ''}>${esc(nm || p.lb)} &middot; ${esc(p.pins)}</span><span class="st ${esc(p.st)}">${esc(p.st)}</span>`; };
@@ -1671,6 +1681,30 @@
       if (!r.ok) throw new Error(r.status === 404 ? 'this pinpoint server predates Close; restart it to enable it' : 'HTTP ' + r.status);
       dropConvo(id);
     } catch (e) { btn.disabled = false; chatAppend({ t: 'error', text: 'Close failed: ' + (e && e.message ? e.message : e), at: new Date().toISOString() }); }
+  }
+  // Continue in a terminal: copy `cd <root> && claude --resume <session>` to the clipboard (synchronously, inside the
+  // click, so Safari allows it) and tell the server to end the worker; the handoff card the server posts into the
+  // transcript is the confirmation (the progress stack's toasts hide while the drawer is open). The root comes from
+  // /api/health (fetched when the drawer is built); the session id rides on each /api/chat row.
+  let chatRoot = '';
+  const loadRoot = () => fetch(API + '/api/health').then((r) => r.json()).then((h) => { if (h && h.root) chatRoot = String(h.root); }).catch(() => {});
+  const shq = (s) => (/^[\w./-]+$/.test(s) ? s : "'" + s.replace(/'/g, "'\\''") + "'");
+  const clipWrite = (text) => { const fb = () => { const ta = document.createElement('textarea'); ta.value = text; ta.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); let ok = false; try { ok = document.execCommand('copy'); } catch (err) {} ta.remove(); return ok; }; return navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(text).then(() => true, () => fb()) : Promise.resolve(fb()); };
+  async function handoffConvo() {
+    const id = chatUi.cur; if (!id || !chatTermBtn) return;
+    const c = chatConvos.find((x) => x.id === id);
+    const local = c && c.session && chatRoot ? 'cd ' + shq(chatRoot) + ' && claude --resume ' + c.session : '';
+    const copying = local ? clipWrite(local) : Promise.resolve(false); // started inside the click gesture
+    chatTermBtn.disabled = true;
+    try {
+      const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(id) + '/handoff', { method: 'POST' });
+      if (!r.ok) throw new Error(r.status === 404 ? 'this pinpoint server predates Continue in terminal; restart it to enable it' : 'HTTP ' + r.status);
+      const j = await r.json().catch(() => ({}));
+      let ok = await copying;
+      if (!ok && j.command) ok = await clipWrite(j.command); // no local command (older server row): try the server's, gesture permitting
+      if (!ok) chatAppend({ t: 'error', text: 'Could not copy the resume command — run this yourself:\n' + (j.command || local || '(no resume command)'), at: new Date().toISOString() });
+    } catch (e) { chatAppend({ t: 'error', text: 'Handoff failed: ' + (e && e.message ? e.message : e), at: new Date().toISOString() }); }
+    chatTermBtn.disabled = false;
   }
   // Forget a closed conversation locally: out of the list, and back to "New conversation" if it was the open one.
   function dropConvo(id) { chatConvos = chatConvos.filter((x) => x.id !== id); if (chatUi.cur === id) selectConvo(null); if (chatSel) chatSel.dataset.sig = ''; fillConvos(); }

@@ -51,6 +51,19 @@ describe('HTTP owner', () => {
     expect((await fetch(base + '/.docs/open-design/demo/missing.html')).status).toBe(404);
     expect((await fetch(base + '/.pinpoint.json')).status).toBe(404); // nothing else is served statically
   });
+  test('handoff ends the worker and posts the resume command for its Claude session', async () => {
+    const r = await post('/api/chat/old-batch/handoff', {}, APP_ORIGIN);
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j).toMatchObject({ ok: true, cwd: project.root, session: '00000000-0000-0000-0000-000000000000' });
+    expect(j.command).toContain(project.root);
+    expect(j.command).toEndWith(' && claude --resume 00000000-0000-0000-0000-000000000000');
+    const chats = await (await fetch(base + '/api/chat')).json();
+    expect(chats.find((c: any) => c.id === 'old-batch').session).toBe('00000000-0000-0000-0000-000000000000');
+    // the transcript keeps the command, so the drawer shows it again after a reload
+    const lines = readFileSync(join(project.root, '.docs', 'pinpoint', 'workers', 'old-batch.chat.jsonl'), 'utf8').trim().split('\n');
+    expect(JSON.parse(lines[lines.length - 1])).toMatchObject({ t: 'status', handoff: true, command: j.command });
+  });
   test('close drops a worker conversation and parks its record so a restart does not revive it', async () => {
     let chats = await (await fetch(base + '/api/chat')).json();
     expect(chats.map((c: any) => c.id)).toContain('old-batch');

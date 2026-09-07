@@ -72,10 +72,11 @@ All `/api/*` routes check `Origin`: allowed are the origins in `.pinpoint.json` 
 | `GET /api/sessions` | live sessions for the To: picker (handlers only on installed projects) |
 | `POST /api/sessions` | heartbeat from follower MCP processes `{ id, label, cwd }` |
 | `GET /api/skills` | skills + commands a worker can run (`~/.claude` and `<root>/.claude`, plus `/clear`, `/compact`) |
-| `GET /api/chat` | worker conversations, newest first |
+| `GET /api/chat` | worker conversations, newest first (each with its Claude `session` id) |
 | `GET /api/chat/:id/events` | SSE: transcript replay, then live events |
 | `POST /api/chat/:id` | `{ text?, images?, pins? }` → to the worker (pins are appended to the batch, numbered on; a `/clear` text empties the batch's pins so the next ones start at #1 again) |
 | `POST /api/chat/:id/stop` | end the worker process (a later message resumes the session) |
+| `POST /api/chat/:id/handoff` | continue in a terminal: end the worker (if running) and note it in the transcript as a `status` with `handoff: true` + the command; returns `{ ok, command, cwd, session }` (the overlay builds the same `cd <root> && claude --resume <session>` from `/api/health` + the row's `session` and puts it on the clipboard rather than showing it) |
 | `POST /api/chat/:id/close` | end the worker (if running) and drop the conversation from `/api/chat`; its record parks as `<id>.json.closed`, transcript + images stay |
 | `GET /api/chat/:id/img/:file` | a screenshot from the transcript |
 
