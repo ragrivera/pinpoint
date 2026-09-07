@@ -81,6 +81,10 @@ pick batches up from the shared directory. Two repos never share a port or a fee
 handled by one worker or session. Per-pin progress is written back into the same file and polled by the
 overlay's progress card.
 
+**Mockups too.** `GET /.docs/open-design/**` serves the project's open-design artifacts (rooted at
+`<root>/.docs/open-design`) with the overlay injected, so pins on a mockup ride the same worker + chat loop;
+the worker brief then edits the artifact's authoring source, never app code. Nothing else is served statically.
+
 **Security.** Every `/api/*` route rejects browser requests whose `Origin` is not one of the repo's app origins
 (from `.pinpoint.json` `apps[].origin`) or `localhost` / `127.0.0.1` / `*.localhost`. The server binds
 `127.0.0.1` only. Workers run with permission prompts skipped, so that guard is what keeps a foreign page from

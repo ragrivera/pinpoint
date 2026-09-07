@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { existsSync, readdirSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { BIN, cleanEnv, freePort, mcpClient, tmpProject, waitFor } from './helpers.ts';
 
@@ -14,7 +14,11 @@ const batch = (to = '') => ({ page: `${APP_ORIGIN}/settings/profile`, title: 'Se
 
 beforeAll(async () => {
   port = await freePort();
-  project = tmpProject({ '.pinpoint.json': JSON.stringify({ port, name: 'acme', session: 'pinpoint_acme', dispatch: 'session', apps: [{ dir: '.', origin: APP_ORIGIN }] }) });
+  project = tmpProject({
+    '.pinpoint.json': JSON.stringify({ port, name: 'acme', session: 'pinpoint_acme', dispatch: 'session', apps: [{ dir: '.', origin: APP_ORIGIN }] }),
+    // a worker record from a previous server run: loadWorkers() revives it as an exited conversation
+    '.docs/pinpoint/workers/old-batch.json': JSON.stringify({ batchId: 'old-batch', workerId: 'w1', sessionUuid: '00000000-0000-0000-0000-000000000000', page: `${APP_ORIGIN}/home`, title: 'Home', state: 'idle', started: true, startedAt: '2026-01-01T00:00:00.000Z', lastAt: '2026-01-01T00:00:00.000Z', turns: 1, costUsd: 0 }),
+  });
   base = `http://127.0.0.1:${port}`;
   owner = Bun.spawn(['bun', BIN, 'serve'], { cwd: project.root, env: cleanEnv({ PINPOINT_ROOT: project.root, PINPOINT_ROLE: 'http', PINPOINT_DETACHED: '1' }), stdout: 'ignore', stderr: 'pipe' });
   await waitFor(async () => (await fetch(base + '/api/health')).ok, 15000);
@@ -36,6 +40,28 @@ describe('HTTP owner', () => {
     const brand = JSON.parse(js.slice('window.__reviewBrand = '.length, js.indexOf('\n')).replace(/;$/, ''));
     expect(brand).toMatchObject({ name: 'Pinpoint', key: 'pinpoint', api: '/api/pins', chat: '/api/chat', dispatch: 'session', port, requiredSession: 'pinpoint_acme' });
     expect(js).toContain('dr-fp'); // the overlay body follows
+  });
+  test('serves an open-design mockup with the overlay injected, and nothing outside that tree', async () => {
+    mkdirSync(join(project.root, '.docs', 'open-design', 'demo'), { recursive: true });
+    writeFileSync(join(project.root, '.docs', 'open-design', 'demo', 'index.html'), '<!doctype html><html><body><h1>Demo</h1></body></html>');
+    const r = await fetch(base + '/.docs/open-design/demo/');
+    expect(r.status).toBe(200);
+    expect(r.headers.get('content-type')).toContain('text/html');
+    expect(await r.text()).toContain('<script src="/pinpoint.js" defer></script>\n</body>');
+    expect((await fetch(base + '/.docs/open-design/demo/missing.html')).status).toBe(404);
+    expect((await fetch(base + '/.pinpoint.json')).status).toBe(404); // nothing else is served statically
+  });
+  test('close drops a worker conversation and parks its record so a restart does not revive it', async () => {
+    let chats = await (await fetch(base + '/api/chat')).json();
+    expect(chats.map((c: any) => c.id)).toContain('old-batch');
+    const r = await post('/api/chat/old-batch/close', {}, APP_ORIGIN);
+    expect(r.status).toBe(200);
+    chats = await (await fetch(base + '/api/chat')).json();
+    expect(chats.map((c: any) => c.id)).not.toContain('old-batch');
+    const workersDir = join(project.root, '.docs', 'pinpoint', 'workers');
+    expect(existsSync(join(workersDir, 'old-batch.json'))).toBe(false);
+    expect(existsSync(join(workersDir, 'old-batch.json.closed'))).toBe(true);
+    expect((await post('/api/chat/old-batch/close', {}, APP_ORIGIN)).status).toBe(404);
   });
   test('rejects a foreign browser origin', async () => {
     const r = await post('/api/pins', batch(), 'https://evil.example');

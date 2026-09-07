@@ -36,7 +36,7 @@
   const TYPES = ['bug', 'layout', 'copy', 'idea', 'question'];
   const state = { on: false, pins: [], general: '', drag: null, editing: null, panelPos: null, collapsed: true, size: { w: 296, h: null }, popSize: { w: 320, h: null }, hintOpen: false };
   // pinpoint chat drawer (module near the end): while open, the floating panel yields to it
-  let chatOpen = false, chatW = 420, chatEl = null, chatScale = 1, chatSlashKey = null, chatLb = null, chatMenuClose = null;
+  let chatOpen = false, chatW = 420, chatEl = null, chatScale = 1, chatSlashKey = null, chatLb = null, chatMenuClose = null, chatRenameKey = null;
   try {
     const s = JSON.parse(localStorage.getItem(KEY) || 'null');
     if (s) { state.pins = s.pins || []; state.general = s.general || ''; state.panelPos = s.panelPos || null; state.collapsed = s.collapsed !== false; state.size = s.size || state.size; state.popSize = s.popSize || state.popSize; state.hintOpen = s.hintOpen === true; }
@@ -735,6 +735,7 @@
     // textareas or the panel's general note. Handled HERE because this capture
     // listener stopPropagation()s overlay keystrokes before they can reach any
     // handler on the textareas themselves.
+    if (chatRenameKey && chatRenameKey(e)) return; // an inline conversation rename owns Enter / Esc
     if (chatMenuClose && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); chatMenuClose(); return; } // the conversation menu closes before anything else reacts to Esc
     if (chatLb) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); chatLb(); } return; } // the image lightbox owns the keyboard while it is up
     if (chatOpen && e.target instanceof Element && e.target.closest('.dr-chat')) {
@@ -1132,17 +1133,23 @@
   let chatUi = { cur: null, w: 420 };
   try { Object.assign(chatUi, JSON.parse(localStorage.getItem(CHATKEY) || '{}')); } catch (e) {}
   chatW = Math.max(340, Math.min(720, Number(chatUi.w) || 420));
-  const chatSave = () => { try { localStorage.setItem(CHATKEY, JSON.stringify({ cur: chatUi.cur, w: chatW, taH: chatUi.taH, hintOpen: chatUi.hintOpen, stage: chatUi.stage })); } catch (e) {} };
+  const chatSave = () => { try { localStorage.setItem(CHATKEY, JSON.stringify({ cur: chatUi.cur, w: chatW, taH: chatUi.taH, hintOpen: chatUi.hintOpen, stage: chatUi.stage, names: chatUi.names, side: chatUi.side })); } catch (e) {} };
   // Registered overlay like the panel and the progress stack: the dock's Look (size, blur,
   // tint via the --dr-* tokens), per-overlay opacity, hover-full and the chip's Open/Hidden
   // all apply here. Chip Hidden == drawer closed, so C / × / Esc and the chip stay in sync.
   let chatHover = false, chatOpacity = 1, chatHoverOpacity = 1, chatBlur = 22;
+  // Which edge the drawer hugs (header toggle, remembered). Closed, it parks just past that edge.
+  const chatSide = () => (chatUi.side === 'left' ? 'left' : 'right');
+  const chatClosedTx = (sc) => (chatSide() === 'left' ? 'translateX(calc(-100% - 30px)) ' : 'translateX(calc(100% + 30px)) ') + sc;
+  let chatMoving = false; // mid side-switch: keep it parked off-screen until it re-enters from the other edge
+  let chatHoldT = null; // after a side switch the drawer keeps its hovered (full) look for ~1.5s, so it is easy to find on the new edge
   const chatApply = () => {
     if (!chatEl) return;
-    chatEl.style.opacity = chatHover || chatLb ? chatHoverOpacity : chatOpacity; // an open lightbox keeps the hovered look: the pointer is on the lightbox, not the drawer
+    chatEl.style.opacity = chatHover || chatLb || chatHoldT ? chatHoverOpacity : chatOpacity; // an open lightbox keeps the hovered look: the pointer is on the lightbox, not the drawer
     chatEl.style.backdropFilter = chatEl.style.webkitBackdropFilter = `blur(${chatBlur}px) saturate(150%)`;
     const sc = chatScale === 1 ? '' : `scale(${chatScale})`;
-    chatEl.style.transform = chatOpen ? sc || 'none' : 'translateX(calc(100% + 30px)) ' + sc; // 'none' beats the stylesheet's closed-state translate at size 1
+    chatEl.classList.toggle('left', chatSide() === 'left');
+    chatEl.style.transform = chatOpen && !chatMoving ? sc || 'none' : chatClosedTx(sc); // 'none' beats the stylesheet's closed-state translate at size 1
     chatEl.style.height = chatScale === 1 ? '' : (100 / chatScale) + 'vh';
     chatEl.style.width = chatW + 'px';
     snPlace();
@@ -1151,6 +1158,8 @@
   const chatCss = `
   .dr-chat{position:fixed;top:0;right:0;height:100vh;width:420px;box-sizing:border-box;z-index:2147483597;display:flex;flex-direction:column;background:rgba(var(--dr-g),.85);-webkit-backdrop-filter:blur(22px) saturate(150%);backdrop-filter:blur(22px) saturate(150%);border-left:1px solid rgba(var(--dr-w),.1);box-shadow:-24px 0 70px rgba(0,0,0,.45);color:var(--dr-fg);font:13px/1.45 system-ui,-apple-system,sans-serif;transform:translateX(calc(100% + 30px));transform-origin:top right;transition:transform .22s cubic-bezier(.22,.61,.36,1),opacity .15s;pointer-events:none}
   .dr-chat.on{pointer-events:auto}
+  .dr-chat.left{right:auto;left:0;border-left:0;border-right:1px solid rgba(var(--dr-w),.1);box-shadow:24px 0 70px rgba(0,0,0,.45);transform:translateX(calc(-100% - 30px));transform-origin:top left}
+  .dr-chat.left .dr-chat-rz{left:auto;right:-3px}
   @media (prefers-reduced-motion:reduce){.dr-chat{transition:none}}
   .dr-chat-rz{position:absolute;left:-3px;top:0;bottom:0;width:7px;cursor:ew-resize}
   .dr-chat-hd{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 12px 12px 16px;border-bottom:1px solid rgba(var(--dr-w),.07);user-select:none}
@@ -1167,9 +1176,13 @@
   .dr-chat-sel .chev{flex:none;display:inline-block;width:5px;height:5px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-2px) rotate(45deg);color:var(--dr-fg3);transition:transform .22s cubic-bezier(.22,.61,.36,1)}
   .dr-chat-sel.open .chev{transform:translateY(1px) rotate(225deg)}
   .dr-chat-sel .menu{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:2;max-height:280px;overflow-y:auto;background:rgba(var(--dr-g),.97);border:1px solid rgba(var(--dr-w),.12);border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,.4);padding:4px;scrollbar-width:thin;scrollbar-color:rgba(var(--dr-w),.18) transparent}
-  .dr-chat-sel .it{display:grid;grid-template-columns:12px 1fr auto;gap:8px;align-items:center;padding:6px 8px;border-radius:6px;cursor:pointer;color:var(--dr-fg);font:12px/1.4 ui-monospace,Menlo,monospace}
+  .dr-chat-sel .it{display:grid;grid-template-columns:12px 1fr auto auto auto;gap:8px;align-items:center;padding:6px 8px;border-radius:6px;cursor:pointer;color:var(--dr-fg);font:12px/1.4 ui-monospace,Menlo,monospace}
   .dr-chat-sel .it:hover{background:rgba(var(--dr-w),.08)}.dr-chat-sel .it.new{color:var(--dr-fg3b)}.dr-chat-sel .it.dis{opacity:.6;cursor:default}
   .dr-chat-sel .it .ck{color:#39d98a;font-size:11px;text-align:center}
+  .dr-chat-sel .it .rn,.dr-chat-sel .it .cl{width:20px;height:20px;display:grid;place-items:center;border:0;border-radius:5px;background:transparent;color:var(--dr-fg3b);font-size:12px;line-height:1;padding:0;cursor:pointer;opacity:0}
+  .dr-chat-sel .it:hover .rn,.dr-chat-sel .it .rn:focus-visible,.dr-chat-sel .it:hover .cl,.dr-chat-sel .it .cl:focus-visible,.dr-chat-sel .it .cl.arm{opacity:1}.dr-chat-sel .it .rn:hover,.dr-chat-sel .it .cl:hover{background:rgba(var(--dr-w),.1);color:var(--dr-fg)}
+  .dr-chat-sel .it .cl{font-size:14px}.dr-chat-sel .it .cl.arm,.dr-chat-sel .it .cl.arm:hover{width:auto;padding:0 6px;color:#ff8a8e;font:600 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase}
+  .dr-chat-sel .rn-in{width:100%;box-sizing:border-box;margin:0;padding:1px 6px;border-radius:5px;border:1px solid rgba(var(--dr-w),.22);background:rgba(0,0,0,.28);color:var(--dr-fg);font:inherit;outline:0}
   @media (prefers-reduced-motion:reduce){.dr-chat-sel .chev{transition:none}}
   .dr-chat-stop{flex:none;width:30px;height:30px;display:grid;place-items:center;border:1px solid rgba(255,90,95,.35);background:rgba(255,90,95,.1);border-radius:999px;padding:0;cursor:pointer}
   .dr-chat-stop::before{content:'';width:9px;height:9px;border-radius:2px;background:#ff8a8e}
@@ -1405,14 +1418,17 @@
     const ann = el('button', 'dr-ann'); const d2 = el('i', 'dr-dot'); ann.append(d2, document.createTextNode('annotate')); ann.title = 'Toggle annotate mode (R)'; ann.onclick = toggle; chatEl._dot = d2; chatEl._ann = ann;
     const nw = el('button', 'dr-fp-min', '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>'); nw.setAttribute('aria-label', 'New conversation'); nw.title = 'New conversation — your message starts a fresh worker for this page'; nw.onclick = () => selectConvo(null);
     const x = el('button', 'dr-fp-min', '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>'); x.setAttribute('aria-label', 'Close chat'); x.title = 'Close chat (Esc) — the panel comes back'; x.onclick = closeChat;
-    r.append(ann, nw, x); hd.append(ttl, r);
+    const sd = el('button', 'dr-fp-min'); sd.type = 'button';
+    const sideSync = () => { const L = chatSide() === 'left'; sd.innerHTML = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M${L ? 15 : 9} 4v16"/></svg>`; sd.title = L ? 'Move the chat to the right edge' : 'Move the chat to the left edge'; sd.setAttribute('aria-label', sd.title); };
+    sideSync(); sd.onclick = () => setChatSide(chatSide() === 'left' ? 'right' : 'left'); chatEl._sideSync = sideSync;
+    r.append(ann, sd, nw, x); hd.append(ttl, r);
     const bar = el('div', 'dr-chat-bar');
     chatSel = el('div', 'dr-chat-sel');
     const selTg = el('button', 'tg'); selTg.type = 'button'; selTg.title = 'Switch conversation'; selTg.setAttribute('aria-haspopup', 'listbox'); selTg.setAttribute('aria-expanded', 'false');
     const selMenu = el('div', 'menu'); selMenu.setAttribute('role', 'listbox'); selMenu.style.display = 'none';
     const menuClose = () => { selMenu.style.display = 'none'; chatSel.classList.remove('open'); selTg.setAttribute('aria-expanded', 'false'); chatMenuClose = null; };
     selTg.onclick = () => { if (chatMenuClose) { chatMenuClose(); return; } selMenu.style.display = ''; chatSel.classList.add('open'); selTg.setAttribute('aria-expanded', 'true'); chatMenuClose = menuClose; };
-    selMenu.addEventListener('click', (e) => { const it = e.target.closest('.it'); if (!it || it.classList.contains('dis')) return; menuClose(); selectConvo(it.dataset.id || null); });
+    selMenu.addEventListener('click', (e) => { const it = e.target.closest('.it'); if (!it || it.classList.contains('dis') || e.target.closest('.rn-in')) return; if (e.target.closest('.rn')) { renameConvo(it); return; } if (e.target.closest('.cl')) { closeConvo(it, e.target.closest('.cl')); return; } menuClose(); selectConvo(it.dataset.id || null); });
     chatSel.append(selTg, selMenu); chatSel._tg = selTg; chatSel._menu = selMenu; selSync(); // placeholder label until the list loads
     chatStopBtn = el('button', 'dr-chat-stop'); chatStopBtn.type = 'button'; chatStopBtn.setAttribute('aria-label', 'Stop the worker'); chatStopBtn.title = 'Stop — end this worker process now (your next message resumes the same session)';
     chatStopBtn.onclick = () => { if (chatUi.cur) fetch(API + BRAND.chat + '/' + encodeURIComponent(chatUi.cur) + '/stop', { method: 'POST' }).catch(() => {}); };
@@ -1509,7 +1525,7 @@
     const rz = el('div', 'dr-chat-rz'); rz.title = 'Resize';
     rz.addEventListener('pointerdown', (e) => {
       e.preventDefault(); const sx = e.clientX, w0 = chatW;
-      const mv = (ev) => { chatW = Math.max(340, Math.min(Math.min(720, window.innerWidth - 80) / chatScale, w0 + (sx - ev.clientX) / chatScale)); chatApply(); };
+      const mv = (ev) => { chatW = Math.max(340, Math.min(Math.min(720, window.innerWidth - 80) / chatScale, w0 + (chatSide() === 'left' ? ev.clientX - sx : sx - ev.clientX) / chatScale)); chatApply(); };
       const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); chatSave(); };
       window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
     });
@@ -1597,7 +1613,8 @@
     });
   }
   function chatAppend(ev) {
-    if (!chatLs) return; if (ev.t === 'user') lockQuestions(ev.text); const node = chatLine(ev); if (!node) return;
+    if (!chatLs) return; if (ev.t === 'status' && ev.closed) { if (chatEs) { chatEs.close(); chatEs = null; } dropConvo(chatUi.cur); return; } // closed (here or in another tab): leave it
+    if (ev.t === 'user') lockQuestions(ev.text); const node = chatLine(ev); if (!node) return;
     if (ev.t === 'status' && ev.reset) { chatLs.innerHTML = ''; chatAtBottom = true; snForget(chatUi.cur, Date.parse(ev.at)); } // /clear wipes the drawer transcript and the batch's pins: live, and on replay so a reload stays cleared
     if (ev.t === 'tool_error') { const last = [...chatLs.querySelectorAll('.m.tool:not(.err)')].pop(); if (last) last.classList.add('failed'); } // the failed call's dot turns red
     chatLs.appendChild(node); if (chatAtBottom) chatLs.scrollTop = chatLs.scrollHeight;
@@ -1610,7 +1627,8 @@
     if (chatStopBtn) chatStopBtn.style.display = state === 'working' || state === 'idle' || state === 'starting' ? '' : 'none';
   }
   const convoParts = (c) => { let path = c.page; try { path = new URL(c.page).pathname; } catch (e) {} const t = new Date(c.startedAt || c.lastAt); const hh = isNaN(t) ? '' : t.toTimeString().slice(0, 5); return { lb: `${hh} ${path}`, pins: c.pins ? c.pins + ' pin' + (c.pins === 1 ? '' : 's') : 'note', st: String(c.state || '') }; };
-  const convoHtml = (c) => { const p = convoParts(c); return `<span class="lb">${esc(p.lb)} &middot; ${esc(p.pins)}</span><span class="st ${esc(p.st)}">${esc(p.st)}</span>`; };
+  const convoHtml = (c) => { const p = convoParts(c), nm = chatUi.names && chatUi.names[c.id]; return `<span class="lb"${nm ? ` title="${esc(p.lb)}"` : ''}>${esc(nm || p.lb)} &middot; ${esc(p.pins)}</span><span class="st ${esc(p.st)}">${esc(p.st)}</span>`; };
+  const CLOSE_TIP = 'Close this conversation: ends its worker if running and removes it from this list (the transcript stays on disk)';
   const newConvoHtml = () => `<span class="lb">${chatConvos.length ? 'New conversation&#8230;' : 'No worker yet &#8212; type below to start one'}</span>`;
   function fillConvos() {
     if (!chatSel) return;
@@ -1618,7 +1636,7 @@
     if (chatSel.dataset.sig !== sig) {
       chatSel.dataset.sig = sig; chatSel._menu.innerHTML = '';
       const it0 = el('div', 'it new' + (chatConvos.length ? '' : ' dis'), '<span class="ck"></span>' + newConvoHtml()); it0.dataset.id = ''; it0.setAttribute('role', 'option'); chatSel._menu.append(it0);
-      chatConvos.forEach((c) => { const it = el('div', 'it', '<span class="ck"></span>' + convoHtml(c)); it.dataset.id = c.id; it.setAttribute('role', 'option'); chatSel._menu.append(it); });
+      chatConvos.forEach((c) => { const it = el('div', 'it', '<span class="ck"></span>' + convoHtml(c) + '<button class="rn" type="button" title="Rename this conversation (just a local label)">&#9998;</button><button class="cl" type="button" title="' + CLOSE_TIP + '">&times;</button>'); it.dataset.id = c.id; it.setAttribute('role', 'option'); chatSel._menu.append(it); });
     }
     selSync();
   }
@@ -1629,6 +1647,33 @@
     chatSel._tg.innerHTML = (cur ? convoHtml(cur) : newConvoHtml()) + '<i class="chev"></i>';
     chatSel._menu.querySelectorAll('.it').forEach((it) => { const on = (it.dataset.id || '') === (cur ? cur.id : ''); it.setAttribute('aria-selected', String(on)); it.querySelector('.ck').innerHTML = on ? '&#10003;' : ''; });
   }
+  // Inline rename of a menu row: Enter or blur saves, Esc cancels, empty clears it. Names are a per-browser label (chatUi) for tracking only.
+  function renameConvo(it) {
+    const id = it.dataset.id, c = chatConvos.find((x) => x.id === id); if (!c) return;
+    const lb = it.querySelector('.lb'), inp = el('input', 'rn-in'); inp.type = 'text'; inp.maxLength = 60; inp.value = (chatUi.names && chatUi.names[id]) || ''; inp.placeholder = convoParts(c).lb; inp.setAttribute('aria-label', 'Conversation name');
+    let done = false;
+    const finish = (save) => { if (done) return; done = true; chatRenameKey = null; if (save) { const v = inp.value.trim(); chatUi.names = chatUi.names || {}; if (v) chatUi.names[id] = v; else delete chatUi.names[id]; chatSave(); } chatSel.dataset.sig = ''; fillConvos(); };
+    chatRenameKey = (e) => { if (e.key !== 'Enter' && e.key !== 'Escape') return false; e.preventDefault(); e.stopPropagation(); finish(e.key === 'Enter'); return true; };
+    inp.addEventListener('blur', () => finish(true));
+    lb.replaceChildren(inp); inp.focus(); inp.select();
+  }
+  // Close a conversation from the menu: the server ends its worker (if running) and drops it from the list; the transcript stays on disk.
+  // A running worker wants a second click within 3s ("stop?") so a stray click cannot end work in flight.
+  async function closeConvo(it, btn) {
+    const id = it.dataset.id, c = chatConvos.find((x) => x.id === id); if (!c) return;
+    if ((c.state === 'working' || c.state === 'starting') && !btn.classList.contains('arm')) {
+      btn.classList.add('arm'); btn.textContent = 'stop?'; btn.title = 'Click again to end this worker and close the conversation';
+      setTimeout(() => { btn.classList.remove('arm'); btn.innerHTML = '&times;'; btn.title = CLOSE_TIP; }, 3000); return;
+    }
+    btn.disabled = true;
+    try {
+      const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(id) + '/close', { method: 'POST' });
+      if (!r.ok) throw new Error(r.status === 404 ? 'this pinpoint server predates Close; restart it to enable it' : 'HTTP ' + r.status);
+      dropConvo(id);
+    } catch (e) { btn.disabled = false; chatAppend({ t: 'error', text: 'Close failed: ' + (e && e.message ? e.message : e), at: new Date().toISOString() }); }
+  }
+  // Forget a closed conversation locally: out of the list, and back to "New conversation" if it was the open one.
+  function dropConvo(id) { chatConvos = chatConvos.filter((x) => x.id !== id); if (chatUi.cur === id) selectConvo(null); if (chatSel) chatSel.dataset.sig = ''; fillConvos(); }
   async function loadConvos() { try { const r = await fetch(API + BRAND.chat); chatConvos = r.ok ? await r.json() : []; } catch (e) { chatConvos = []; } fillConvos(); }
   function selectConvo(id) {
     if (chatEs) { chatEs.close(); chatEs = null; }
@@ -1716,6 +1761,17 @@
     pApply();
   }
   function toggleChat() { if (chatOpen) closeChat(); else openChat(); }
+  function setChatSide(side) {
+    if (chatMoving || side === chatSide()) return;
+    clearTimeout(chatHoldT); chatHoldT = setTimeout(() => { chatHoldT = null; chatApply(); }, 1500);
+    const go = () => {
+      chatUi.side = side; chatSave();
+      if (chatEl) { chatEl.classList.toggle('left', side === 'left'); chatEl.style.transition = 'none'; chatEl.style.transform = chatClosedTx(chatScale === 1 ? '' : `scale(${chatScale})`); void chatEl.offsetWidth; chatEl.style.transition = ''; } // park it past the new edge, untransitioned, so it slides in from there
+      chatMoving = false; chatApply(); if (chatEl && chatEl._sideSync) chatEl._sideSync();
+    };
+    if (!chatOpen || !chatEl || matchMedia('(prefers-reduced-motion:reduce)').matches) { go(); return; }
+    chatMoving = true; chatApply(); setTimeout(go, 230); // slide out on the current edge, then in on the other
+  }
 
   buildPanel();
   render();

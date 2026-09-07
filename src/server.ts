@@ -8,6 +8,10 @@
 //
 // Nothing here serves the app: the project's own dev server does (the Vite plugin or
 // <PinpointScript/> adds the script tag). Pins resolve to source files and routes.
+// The one static exception is the project's open-design mockups (GET /.docs/open-design/**,
+// rooted at the project), served with the same overlay injected so mockup pins ride the
+// same worker + chat loop as app pins; the worker brief tells the two apart by the page
+// path (an artifact pin edits the artifact, never app source).
 //
 // Dispatch. An installed project defaults to "dispatch": "worker": Send in the overlay
 // writes the batch pre-claimed and spawns `claude -p` (stream-json in/out) from the repo
@@ -50,7 +54,7 @@
 
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, watch, writeFileSync } from 'fs';
 import { homedir } from 'os';
-import { basename, join, resolve } from 'path';
+import { basename, dirname, extname, join, resolve, sep } from 'path';
 import { findProject as findProjectFile } from './config.js';
 import pkg from '../package.json';
 
@@ -111,6 +115,29 @@ function upsertSession(s: Omit<Session, 'seenAt'>) { registry.set(s.id, { ...s, 
 function liveSessions(): Session[] { const now = Date.now(); return [...registry.values()].filter((s) => now - s.seenAt < SESSION_TTL_MS).sort((a, b) => a.label.localeCompare(b.label)); }
 // Read per request so overlay edits are live without restarting the MCP.
 const overlay = () => `window.__reviewBrand = ${JSON.stringify(BRAND)};\n` + readFileSync(OVERLAY_PATH, 'utf8');
+
+// ─── Open-design artifacts ────────────────────────────────────────────────────
+// Mockup explorers under <root>/.docs/open-design are served from here with the overlay
+// injected, so pins on a mockup use the same Send → worker → chat loop as pins on the app.
+// Only that prefix is served (GET); everything else stays API-only.
+const ARTIFACT_PREFIX = '/.docs/open-design/';
+const ARTIFACT_ROOT = join(ROOT, '.docs', 'open-design');
+const ARTIFACT_MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.woff': 'font/woff', '.webp': 'image/webp', '.gif': 'image/gif', '.ico': 'image/x-icon' };
+const ARTIFACT_INJECT = '<script src="/pinpoint.js" defer></script>';
+// The decoded artifact path of a batch page, or null when the page is the app.
+const artifactPath = (page: string): string | null => { try { const p = decodeURIComponent(new URL(page).pathname); return p.startsWith(ARTIFACT_PREFIX) ? p : null; } catch { return null; } };
+function serveArtifact(pathname: string): Response | null {
+  let p: string; try { p = decodeURIComponent(pathname); } catch { return null; }
+  if (!p.startsWith(ARTIFACT_PREFIX)) return null;
+  if (p.endsWith('/')) p += 'index.html';
+  const file = resolve(ROOT, '.' + p);
+  if (!file.startsWith(ARTIFACT_ROOT + sep) || !existsSync(file) || statSync(file).isDirectory()) return new Response('not found', { status: 404 });
+  const ext = extname(file).toLowerCase();
+  if (ext !== '.html') return new Response(Bun.file(file), { headers: { 'Content-Type': ARTIFACT_MIME[ext] || 'application/octet-stream', 'Cache-Control': 'no-store' } });
+  let html = readFileSync(file, 'utf8');
+  if (!html.includes('pinpoint.js')) html = html.includes('</body>') ? html.replace('</body>', ARTIFACT_INJECT + '\n</body>') : html + ARTIFACT_INJECT;
+  return new Response(html, { headers: { 'Content-Type': ARTIFACT_MIME['.html'], 'Cache-Control': 'no-store' } });
+}
 
 const log = (...a: unknown[]) => console.error('[pinpoint]', ...a); // stderr — stdout is the MCP channel
 
@@ -297,8 +324,12 @@ const flat = (c: unknown): string => (typeof c === 'string' ? c : Array.isArray(
 const pinRows = (pins: unknown[], offset = 0) => (pins as any[]).map((p, i) => ({ n: offset + i + 1, type: p?.type || '', comment: p?.comment || '', fix: p?.fix || '', element: p?.element ? { tag: p.element.tag, path: p.element.path, text: p.element.text } : undefined, near: p?.near, rect: p?.rect, scrollY: p?.scrollY }));
 function batchPrompt(b: Batch): string {
   const pins = pinRows(b.pins);
+  const art = artifactPath(b.page); // set when the pins are on an open-design mockup this server serves, not on the app
+  const artDir = art ? dirname(join(ROOT, '.' + art)) : '';
   return [
-    `You are the PINPOINT headless worker for batch ${b.id} in ${ROOT}. A reviewer pinned feedback on the running app. No one is watching a terminal: work autonomously, keep every change surgical, and do not commit.`,
+    art
+      ? `You are the PINPOINT headless worker for batch ${b.id} in ${ROOT}. A reviewer pinned feedback on an open-design MOCKUP that this server serves from the repo (${art}) — not on the running app. No one is watching a terminal: work autonomously, keep every change surgical, and do not commit.`
+      : `You are the PINPOINT headless worker for batch ${b.id} in ${ROOT}. A reviewer pinned feedback on the running app. No one is watching a terminal: work autonomously, keep every change surgical, and do not commit.`,
     `Page: ${b.page}`,
     `Title: ${b.title || ''}`,
     b.viewport ? `Viewport: ${JSON.stringify(b.viewport)}` : '',
@@ -306,10 +337,14 @@ function batchPrompt(b: Batch): string {
     pins.length ? `Pins (${pins.length}):\n${JSON.stringify(pins, null, 2)}` : 'No pins: the general note is the whole request. Report it as pin 0.',
     ``,
     `Workflow:`,
-    `1. Resolve each pin to source. Grep the element's rendered text (not the CSS path, which is brittle) across the app that serves this route; the route narrows it to a route file plus its feature components. The pinpoint MCP tool get_pins { id: "${b.id}" } returns the raw batch again if you need it.`,
+    art
+      ? `1. This is a design artifact, not app source. Work only inside its folder (${artDir}): edit the authoring source — index.src.html when the folder has one (its README says so), otherwise the served .html — and for a Mode B bundle rebuild afterwards: cp index.src.html index.html && bun ~/.claude/skills/open-design/scripts/harden-mode-b.mjs "${artDir}". Never touch apps/* or packages/* for a mockup pin; if a pin clearly asks for the real app to change, say so and report it as "question". Each pin's "state" records the explorer layout/scenario it was drawn on — honor it. The pinpoint MCP tool get_pins { id: "${b.id}" } returns the raw batch again if you need it.`
+      : `1. Resolve each pin to source. Grep the element's rendered text (not the CSS path, which is brittle) across the app that serves this route; the route narrows it to a route file plus its feature components. The pinpoint MCP tool get_pins { id: "${b.id}" } returns the raw batch again if you need it.`,
     `2. Report progress with the pinpoint MCP tool report_pin { id: "${b.id}", pin: N, status }: "working" when you start a pin, then "done", "skipped" or "question" when you finish it (question = you answered instead of building; put the answer in note, ≤200 chars). Pin 0 is the general note. Every pin must reach a terminal status.`,
     `3. Fix in place, following the repo's CLAUDE.md conventions and its own package manager. Re-read a file right before editing it and use exact-match edits; never reformat whole files.`,
-    `4. Verify only what you touched: lint on the changed files and the workspace's type-check script.`,
+    art
+      ? `4. Verify only what you touched: after the rebuild, fetch the page from this server (curl -s http://127.0.0.1:${PORT}${art}) and confirm it still carries the overlay tag and no Babel/CDN script crept back in.`
+      : `4. Verify only what you touched: lint on the changed files and the workspace's type-check script.`,
     `5. Reply with a numbered list matching the pin numbers: what you understood, then what you did (or why not). Keep it short; the reviewer reads it in a chat drawer beside the page and may follow up here. If something is genuinely ambiguous, state your assumption, do the work, and say so.`,
     `6. Never open a reply with a timestamp line (e.g. *[2026-09-06 23:28:58]*), even when the project's CLAUDE.md asks for one: the drawer stamps every message itself. Put commands and code in fenced blocks; the drawer gives those a copy button.`,
     `7. To ask the reviewer to choose, end the reply with a fenced block whose language is \`question\`: the first line is the question, then one choice per line starting with "- " (2 to 6, each a short sentence that stands alone as an answer). The drawer shows the choices as buttons plus a free-text field it adds itself (so never add an "other" choice); a tap only selects, and Submit sends the answer as the reviewer's next message. Several \`question\` blocks in one reply become one stepper with a single Submit, and the answers arrive together as one line per question: "<question> \u2192 <answer>". Only when the answers genuinely coexist (surfaces to reach, features to include \u2014 never "which design" or a yes/no), use the fence \`question multi\` instead: taps toggle, and the picks arrive joined with " + " (e.g. "Desktop + Mobile"); say in the question what picking several means. Decide per question; single-pick is the default. Never lay choices out as A/B/C prose or ask them to type a letter.`,
@@ -382,9 +417,10 @@ class Worker {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private killTimer: ReturnType<typeof setTimeout> | null = null;
   private queue: UserContent[] = [];
+  closed = false; // closed from the picker: the record parks as <id>.json.closed so loadWorkers() skips it; transcript + images stay
   constructor(public rec: WorkerRec) { this.saveRec(); }
   get chatFile() { return join(WORKERS_DIR, `${this.rec.batchId}.chat.jsonl`); }
-  get recFile() { return join(WORKERS_DIR, `${this.rec.batchId}.json`); }
+  get recFile() { return join(WORKERS_DIR, `${this.rec.batchId}.json${this.closed ? '.closed' : ''}`); }
   saveRec() { mkdirSync(WORKERS_DIR, { recursive: true }); writeFileSync(this.recFile, JSON.stringify(this.rec, null, 2)); }
   history(): ChatEvent[] { try { return readFileSync(this.chatFile, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } }
   emit(e: { t: string; [k: string]: unknown }) {
@@ -497,6 +533,15 @@ class Worker {
     try { (p.stdin as any).end(); } catch {}
     this.killTimer = setTimeout(() => { if (this.proc === p) { try { p.kill(); } catch {} } }, 15_000);
   }
+  /** Close the conversation for good: end the process (if any), drop it from /api/chat and park the record so a restart does not bring it back. */
+  close(reason: string) {
+    this.stop(reason);
+    const live = this.recFile; this.closed = true;
+    try { if (existsSync(live)) renameSync(live, this.recFile); else this.saveRec(); } catch {}
+    workers.delete(this.rec.batchId);
+    this.emit({ t: 'status', state: this.rec.state, closed: true });
+    log(`worker ${this.rec.workerId} closed ${this.rec.batchId}`);
+  }
 }
 // Workers load only this MCP (fast start, no unrelated servers) unless worker.mcp = "all".
 function writeWorkerMcpCfg() { mkdirSync(WORKERS_DIR, { recursive: true }); writeFileSync(WORKER_MCP_CFG, JSON.stringify({ mcpServers: { pinpoint: { command: process.execPath, args: [import.meta.path], env: { PINPOINT_ROOT: ROOT } } } }, null, 2)); }
@@ -558,6 +603,7 @@ try {
       if (!originOk(origin)) { log('refused origin', origin, url.pathname); return new Response('forbidden origin', { status: 403 }); }
       const CORS = corsFor(req);
       if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
+      if (req.method === 'GET') { const art = serveArtifact(url.pathname); if (art) return art; }
       if (url.pathname === '/api/health') return Response.json({ ok: true, root: ROOT, port: PORT, project: PROJECT.file ?? null, name: PROJECT_NAME, dispatch: DISPATCH, claudeBin: CLAUDE_BIN, requiredSession: STRICT ? REQUIRED_SESSION : null, feedbackDir: FEEDBACK_DIR, sessions: liveSessions().length, handlers: handlers().length, workers: [...workers.values()].filter((w) => w.proc).length }, { headers: CORS });
       if (url.pathname === '/api/skills' && req.method === 'GET') return Response.json(listSkills(), { headers: CORS });
       if (url.pathname === '/api/pins' && req.method === 'POST') {
@@ -573,7 +619,7 @@ try {
         return Response.json({ ok: true }, { headers: CORS });
       }
       if (url.pathname === '/api/chat' && req.method === 'GET') return Response.json(listChats(), { headers: CORS });
-      const cm = /^\/api\/chat\/([^/]+)(?:\/(events|stop)|\/img\/([^/]+))?$/.exec(url.pathname);
+      const cm = /^\/api\/chat\/([^/]+)(?:\/(events|stop|close)|\/img\/([^/]+))?$/.exec(url.pathname);
       if (cm) {
         const id = decodeURIComponent(cm[1]);
         const w = workers.get(id);
@@ -586,6 +632,7 @@ try {
         }
         if (cm[2] === 'events' && req.method === 'GET') return sse(w, req, CORS);
         if (cm[2] === 'stop' && req.method === 'POST') { w.stop('stopped from the overlay'); return Response.json({ ok: true }, { headers: CORS }); }
+        if (cm[2] === 'close' && req.method === 'POST') { w.close('closed from the overlay'); return Response.json({ ok: true }, { headers: CORS }); }
         if (!cm[2] && req.method === 'POST') {
           const j = await req.json().catch(() => ({}));
           const text = String(j?.text ?? '').trim();
@@ -622,7 +669,7 @@ if (SELF) {
 // ─── MCP face ─────────────────────────────────────────────────────────────────
 const DISPATCH_NOTE = DISPATCH === 'worker' ? ` This project dispatches batches to headless workers by default; only batches explicitly addressed to this session (To: picker) arrive here.` : '';
 const TOOLS = [
-  { name: 'wait_for_pins', description: 'Block until the user presses "Send to Claude" in the PINPOINT overlay on a live app page (or until timeout_seconds elapses). Returns the batch: page URL (route), general note, and pins (rect, element path/text, type, comment, fix). Resolve each pin to its source component, fix in place, reply by pin number.' + DISPATCH_NOTE,
+  { name: 'wait_for_pins', description: 'Block until the user presses "Send to Claude" in the PINPOINT overlay on a live app page or on an open-design mockup this server serves (or until timeout_seconds elapses). Returns the batch: page URL (route), general note, and pins (rect, element path/text, type, comment, fix). Resolve each pin to its source component, fix in place, reply by pin number.' + DISPATCH_NOTE,
     inputSchema: { type: 'object', properties: { timeout_seconds: { type: 'number', description: 'Max seconds to wait (default 240).' } } } },
   { name: 'get_pins', description: 'Return unread pin batches immediately (non-blocking), or one saved batch by id (headless workers fetch their batch this way).',
     inputSchema: { type: 'object', properties: { id: { type: 'string' } } } },

@@ -1,6 +1,6 @@
 ---
 name: pinpoint
-description: Live-code review loop — the user pins elements on the RUNNING app (localhost dev server) with the PINPOINT overlay, Claude receives the batch via the `pinpoint` MCP, resolves each pin to its source component, fixes it in place, and replies by pin number. Use when the user says "check my pins", "pinpoint", "I pinned something on the app", or wants to annotate a live page. ALSO use for `/pinpoint --install` and any phrasing like "wire pinpoint into this repo", "set up pinpoint for this project", "make this project use pinpoint", or "the Pinpoint pill isn't showing on my app" — that runs `pinpoint install`, which gives the repo its own pinpoint server port and handler-session name (.pinpoint.json → a session-dispatch handler must be named pinpoint_<project>) and wires the overlay into every Vite app. Not for reviewing static design mockups.
+description: Live-code review loop — the user pins elements on the RUNNING app (localhost dev server) with the PINPOINT overlay, Claude receives the batch via the `pinpoint` MCP, resolves each pin to its source component, fixes it in place, and replies by pin number. Use when the user says "check my pins", "pinpoint", "I pinned something on the app", or wants to annotate a live page. ALSO use for `/pinpoint --install` and any phrasing like "wire pinpoint into this repo", "set up pinpoint for this project", "make this project use pinpoint", or "the Pinpoint pill isn't showing on my app" — that runs `pinpoint install`, which gives the repo its own pinpoint server port and handler-session name (.pinpoint.json → a session-dispatch handler must be named pinpoint_<project>) and wires the overlay into every Vite app. Mockups under `.docs/open-design` served by the pinpoint server ride the same loop (the worker edits the artifact, never app source); other static mockups are not this skill's job.
 ---
 
 # pinpoint — pin the live app, fix the source
@@ -33,8 +33,9 @@ in the overlay:
    with the page, viewport, general note and pins, resolves them to source, fixes in place,
    reports each pin through `report_pin`, and replies as a numbered list.
 
-The overlay opens a **chat drawer** (right edge; `C` toggles it, `Esc` closes it, the 💬
-button on the panel and the *chat* button on a progress card open it). The drawer takes
+The overlay opens a **chat drawer** (right edge by default, a header button parks it on the
+left instead; `C` toggles it, `Esc` closes it, the 💬 button on the panel and the *chat*
+button on a progress card open it). The drawer takes
 precedence over the floating panel: while it is open the panel is hidden and the progress
 stack shifts left; `R` and the pins keep working. It streams the worker's transcript
 (`GET /api/chat/:id/events`, SSE: replay then live — assistant text, tool lines, pin
@@ -45,7 +46,10 @@ progress, turn results) and follow-ups typed there go to the same worker (`POST
 with no conversation selected starts a new worker for the page (sent as a note-only batch).
 Pins placed while the drawer is open ride along with the next message. Screenshots can be
 pasted or dropped into the drawer. `/` as the first character lists the skills and commands
-the worker can run. One conversation per batch; the picker lists them newest first.
+the worker can run. One conversation per batch; the picker lists them newest first, each row with a *rename*
+(a local label, per browser) and a *close* (`POST /api/chat/:id/close`: ends the worker if
+running and parks its record as `<id>.json.closed` so a restart does not revive it; a running
+worker asks for a second click).
 Transcripts (`<id>.chat.jsonl`) and worker records (`<id>.json`) live in
 `.docs/pinpoint/workers/`; the batch itself stays in `feedback/`.
 

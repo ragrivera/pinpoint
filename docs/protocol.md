@@ -65,6 +65,7 @@ All `/api/*` routes check `Origin`: allowed are the origins in `.pinpoint.json` 
 | route | purpose |
 |---|---|
 | `GET /pinpoint.js` | the overlay, prefixed with `window.__reviewBrand = {…}` (name, key, api paths, dispatch, port, requiredSession) |
+| `GET /.docs/open-design/**` | the project's open-design mockups (rooted at `<root>/.docs/open-design`); `.html` is served with the overlay `<script>` injected; the only static tree |
 | `GET /api/health` | `{ ok, root, port, project, name, dispatch, claudeBin, requiredSession, feedbackDir, sessions, handlers, workers }` |
 | `POST /api/pins` | receive a batch → `{ ok, id, worker }`; `409` with `hint` when session dispatch has no handler; `503` when a follower is asked to spawn a worker |
 | `GET /api/pins/:id` | progress: `{ id, page, to, claimedBy, claimedLabel, worker, total, noteOnly, resolved, complete, progress }` |
@@ -75,10 +76,11 @@ All `/api/*` routes check `Origin`: allowed are the origins in `.pinpoint.json` 
 | `GET /api/chat/:id/events` | SSE: transcript replay, then live events |
 | `POST /api/chat/:id` | `{ text?, images?, pins? }` → to the worker (pins are appended to the batch, numbered on; a `/clear` text empties the batch's pins so the next ones start at #1 again) |
 | `POST /api/chat/:id/stop` | end the worker process (a later message resumes the session) |
+| `POST /api/chat/:id/close` | end the worker (if running) and drop the conversation from `/api/chat`; its record parks as `<id>.json.closed`, transcript + images stay |
 | `GET /api/chat/:id/img/:file` | a screenshot from the transcript |
 
 Chat events (`t`): `batch`, `user`, `assistant`, `tool`, `tool_error`, `result`, `status`, `stderr`, `error`,
-`sync`. Status states: `starting`, `working`, `idle`, `exited`, `error`.
+`sync`. Status states: `starting`, `working`, `idle`, `exited`, `error`; a `status` with `closed: true` is a closed conversation's last event.
 
 ## MCP tools (stdio, JSON-RPC 2.0 newline-delimited)
 
@@ -99,6 +101,7 @@ from `~/.claude/sessions/<pid>.json` (or `PINPOINT_SESSION`), re-read live so `/
 -n pin-<id> --session-id <uuid> [--strict-mcp-config --mcp-config .docs/pinpoint/workers/mcp.json]`, cwd =
 root, env `PINPOINT_ROOT`, `PINPOINT_SESSION_ID=<workerId>`, `PINPOINT_SESSION=worker:<id>`. The first
 message is the batch brief (page, viewport, note, pins, the workflow: resolve → `report_pin` → fix →
-verify → numbered reply). Follow-ups are `{"type":"user","message":{"role":"user","content":…}}` lines on
+verify → numbered reply); when the page is a mockup this server serves (`/.docs/open-design/**`) the brief
+switches to artifact rules: edit the authoring source inside that folder, rebuild, never touch app code. Follow-ups are `{"type":"user","message":{"role":"user","content":…}}` lines on
 stdin; image blocks travel inline. After `worker.idleMinutes` stdin is closed; the next message restarts
 with `--resume <uuid>`. Verified against Claude Code 2.1.263.
