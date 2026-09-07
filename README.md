@@ -56,6 +56,25 @@ import pinpoint from '../.pinpoint.json';
 Anything else: `<script src="http://127.0.0.1:<port>/pinpoint.js" defer></script>` in the dev HTML, behind a
 dev-only condition. The tag must never ship.
 
+### Flutter apps — tap-to-pin, zero app code
+
+A Flutter app gets nothing injected. Instead, `pinpoint flutter` drives the widget inspector
+over the Dart VM Service of a running **debug** build:
+
+```sh
+flutter run                      # copy the printed "A Dart VM Service … is available at:" URI
+bun run pinpoint flutter --vm-uri http://127.0.0.1:PORT/TOKEN=/ --app-root <flutter app dir>
+```
+
+Select mode turns on on the device: every widget you tap arrives on `http://127.0.0.1:<port>/flutter`
+as a card — widget type, `file:line` (from `--track-widget-creation`), a widget screenshot. Annotate,
+**Send**, and the pins ride the normal worker + chat loop, pre-resolved to source (`source: {file,
+line, column}` on each pin — no grepping). When the worker finishes every pin, the CLI triggers
+flutter_tools' full hot reload so the fix appears on the device. Taps on framework widgets (outside
+your `--app-root`s) are skipped with a logged reason; profile/release builds are refused up front.
+Flags: `--app-root` (repeatable; default: nearest `pubspec.yaml`), `--port`, `--no-reload`,
+`--full-screenshots`.
+
 ## How it works
 
 ```
@@ -99,6 +118,8 @@ pinpoint install [--root <dir>] [--port <n>] [--name <project>] [--app <dir>]...
                  [--dry-run] [--no-add] [--no-mcp] [--no-skill] [--no-phoenix] [--no-gitignore]
 pinpoint serve                                  MCP (stdio) + HTTP for the repo above cwd
 pinpoint report <batch> <pin> <status> [note]   write per-pin progress from a shell
+pinpoint flutter --vm-uri <uri> [--app-root <dir>]... [--port <n>] [--no-reload] [--full-screenshots]
+                                                tap-to-pin capture for a running Flutter debug app
 pinpoint skill [--user] [--link] [--force]      copy/link the /pinpoint skill (repo, or ~/.claude with --user)
 pinpoint health                                 GET /api/health on this repo's port
 ```

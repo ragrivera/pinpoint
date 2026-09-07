@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pinpoint · Flutter</title>
+<style>
+  :root { --bg:#0f1115; --card:#181b22; --line:#262b36; --txt:#e6e9ef; --dim:#8b93a5; --acc:#5b8cff; --ok:#3fb96f; --warn:#e0a63c; --err:#e05c5c; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt); font:14px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }
+  header { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:12px; padding:12px 18px; background:var(--bg); border-bottom:1px solid var(--line); }
+  header h1 { font-size:15px; margin:0; font-weight:650; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--err); flex:none; }
+  .dot.on { background:var(--ok); }
+  .who { color:var(--dim); font-size:12px; margin-right:auto; }
+  button { background:var(--card); color:var(--txt); border:1px solid var(--line); border-radius:8px; padding:6px 12px; font:inherit; font-size:13px; cursor:pointer; }
+  button:hover { border-color:var(--dim); }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#fff; font-weight:600; }
+  button.primary:disabled { opacity:.45; cursor:default; }
+  .chip { font-size:12px; color:var(--dim); border:1px solid var(--line); border-radius:99px; padding:3px 10px; }
+  .chip.ok { color:var(--ok); border-color:var(--ok); }
+  .chip.err { color:var(--err); border-color:var(--err); }
+  main { max-width:860px; margin:0 auto; padding:18px; }
+  .empty { color:var(--dim); text-align:center; padding:70px 20px; }
+  .empty b { color:var(--txt); }
+  .card { display:flex; gap:14px; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
+  .card.off { opacity:.45; }
+  .shot { flex:none; width:96px; }
+  .shot img { max-width:96px; max-height:120px; border-radius:8px; border:1px solid var(--line); background:#fff; display:block; }
+  .shot .noimg { width:96px; height:72px; border-radius:8px; border:1px dashed var(--line); display:flex; align-items:center; justify-content:center; color:var(--dim); font-size:11px; }
+  .body { flex:1; min-width:0; }
+  .rowtop { display:flex; align-items:baseline; gap:10px; }
+  .n { font-weight:700; color:var(--acc); }
+  .widget { font-weight:650; }
+  .src { color:var(--dim); font-size:12px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; overflow-wrap:anywhere; }
+  .types { display:flex; gap:6px; margin:8px 0; flex-wrap:wrap; }
+  .types button { padding:3px 10px; border-radius:99px; font-size:12px; color:var(--dim); }
+  .types button.sel { background:var(--acc); border-color:var(--acc); color:#fff; }
+  textarea, input[type=text] { width:100%; background:var(--bg); border:1px solid var(--line); border-radius:8px; color:var(--txt); font:inherit; padding:8px 10px; }
+  textarea { resize:vertical; min-height:52px; }
+  input[type=text] { margin-top:6px; }
+  .opts { display:flex; gap:16px; margin-top:8px; font-size:12px; color:var(--dim); align-items:center; }
+  .opts label { display:flex; gap:5px; align-items:center; cursor:pointer; }
+  .general { margin:18px 0 10px; }
+  .general label { display:block; color:var(--dim); font-size:12px; margin-bottom:6px; }
+  .sendrow { display:flex; align-items:center; gap:12px; margin:16px 0 60px; }
+  .hint { color:var(--dim); font-size:12px; }
+  .toggle { display:flex; align-items:center; gap:7px; font-size:13px; color:var(--dim); cursor:pointer; user-select:none; }
+  .toggle .tk { width:34px; height:19px; border-radius:99px; background:var(--line); position:relative; transition:background .15s; }
+  .toggle .tk::after { content:''; position:absolute; top:2px; left:2px; width:15px; height:15px; border-radius:50%; background:var(--dim); transition:left .15s, background .15s; }
+  .toggle.on .tk { background:var(--acc); }
+  .toggle.on .tk::after { left:17px; background:#fff; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="dot"></span>
+  <h1>Pinpoint · Flutter</h1>
+  <span class="who" id="who">waiting for <code>pinpoint flutter</code>…</span>
+  <span class="chip" id="reload" hidden></span>
+  <span class="toggle on" id="selToggle" title="Widget select mode on the device"><span class="tk"></span>select mode</span>
+  <button id="clear">Clear</button>
+</header>
+<main>
+  <div class="empty" id="empty">
+    <p><b>No taps yet.</b></p>
+    <p>Run <code>bun run pinpoint flutter --vm-uri &lt;uri&gt;</code> against your <code>flutter run</code>,<br>
+    then tap widgets on the device or emulator — each tap lands here as a pin.</p>
+  </div>
+  <div id="cards"></div>
+  <div class="general">
+    <label for="gen">General note (pin 0) — optional, sent with the batch</label>
+    <textarea id="gen" placeholder="Anything about the screen as a whole…"></textarea>
+  </div>
+  <div class="sendrow">
+    <button class="primary" id="send" disabled>Send to Claude</button>
+    <span class="hint" id="sendhint">taps you leave unchecked stay here for the next batch</span>
+  </div>
+</main>
+<script src="/pinpoint.js" defer></script>
+<script>
+(() => {
+  const TYPES = ['bug', 'layout', 'copy', 'idea', 'question'];
+  const $ = (s, el) => (el || document).querySelector(s);
+  const cards = $('#cards'), empty = $('#empty'), dot = $('#dot'), who = $('#who');
+  const sendBtn = $('#send'), reloadChip = $('#reload'), selToggle = $('#selToggle');
+  const taps = new Map(); // n -> { tap, el, type, include, attach }
+  let selectOn = true;
+
+  const refresh = () => {
+    empty.style.display = taps.size ? 'none' : '';
+    const inc = [...taps.values()].filter((t) => t.include);
+    sendBtn.disabled = !inc.length && !$('#gen').value.trim();
+    sendBtn.textContent = inc.length ? `Send ${inc.length} pin${inc.length === 1 ? '' : 's'} to Claude` : 'Send to Claude';
+  };
+
+  const addCard = (tap) => {
+    if (taps.has(tap.n)) return;
+    const el = document.createElement('div');
+    el.className = 'card';
+    const src = `${tap.source.file}:${tap.source.line}`;
+    el.innerHTML = `
+      <div class="shot">${tap.screenshot ? `<img alt="widget" src="data:${tap.screenshot.type};base64,${tap.screenshot.data}">` : '<div class="noimg">no shot</div>'}</div>
+      <div class="body">
+        <div class="rowtop"><span class="n">#${tap.n}</span><span class="widget"></span></div>
+        <div class="src"></div>
+        <div class="types">${TYPES.map((t) => `<button data-t="${t}">${t}</button>`).join('')}</div>
+        <textarea placeholder="What's wrong here?"></textarea>
+        <input type="text" placeholder="Suggested fix (optional)">
+        <div class="opts">
+          <label><input type="checkbox" class="inc" checked> include in next send</label>
+          ${tap.screenshot ? '<label><input type="checkbox" class="att" checked> attach screenshot</label>' : ''}
+        </div>
+      </div>`;
+    $('.widget', el).textContent = tap.widget || 'widget';
+    $('.src', el).textContent = src;
+    const rec = { tap, el, type: '', include: true, attach: Boolean(tap.screenshot) };
+    for (const b of el.querySelectorAll('.types button')) b.onclick = () => {
+      rec.type = rec.type === b.dataset.t ? '' : b.dataset.t;
+      for (const x of el.querySelectorAll('.types button')) x.classList.toggle('sel', x.dataset.t === rec.type);
+    };
+    $('.inc', el).onchange = (e) => { rec.include = e.target.checked; el.classList.toggle('off', !rec.include); refresh(); };
+    const att = $('.att', el); if (att) att.onchange = (e) => { rec.attach = e.target.checked; };
+    $('textarea', el).oninput = refresh;
+    taps.set(tap.n, rec);
+    cards.append(el);
+    refresh();
+  };
+
+  const setClient = (c) => {
+    dot.classList.toggle('on', Boolean(c.connected));
+    who.textContent = c.connected ? `connected · ${c.app || 'flutter'}` : 'waiting for `pinpoint flutter`…';
+  };
+  const setSelect = (on) => { selectOn = on; selToggle.classList.toggle('on', on); };
+
+  const es = new EventSource('/api/flutter/events');
+  es.onmessage = (m) => {
+    let e; try { e = JSON.parse(m.data); } catch { return; }
+    if (e.t === 'client') setClient(e);
+    else if (e.t === 'tap') addCard(e.tap);
+    else if (e.t === 'cleared') { taps.clear(); cards.innerHTML = ''; refresh(); }
+    else if (e.t === 'select') setSelect(Boolean(e.on));
+    else if (e.t === 'reloaded') {
+      reloadChip.hidden = false;
+      reloadChip.className = 'chip ' + (e.ok ? 'ok' : 'err');
+      reloadChip.textContent = e.ok ? 'hot reloaded ✓' : 'hot reload failed';
+      reloadChip.title = e.error || '';
+      setTimeout(() => { reloadChip.hidden = true; }, 12000);
+    }
+  };
+
+  selToggle.onclick = () => fetch('/api/flutter/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: !selectOn }) });
+  $('#clear').onclick = () => fetch('/api/flutter/clear', { method: 'POST' });
+  $('#gen').oninput = refresh;
+
+  sendBtn.onclick = async () => {
+    const inc = [...taps.values()].filter((t) => t.include);
+    const general = $('#gen').value.trim();
+    if (!inc.length && !general) return;
+    const pins = [], images = [];
+    for (const r of inc) {
+      pins.push({
+        type: r.type, comment: $('textarea', r.el).value.trim(), fix: $('input[type=text]', r.el).value.trim(),
+        rect: r.tap.rect || { x: 0, y: 0, w: 0, h: 0 }, scrollY: 0,
+        widget: r.tap.widget, source: r.tap.source, at: r.tap.at,
+      });
+      if (r.attach && r.tap.screenshot && images.length < 6) images.push({ name: `pin-${r.tap.n}-${(r.tap.widget || 'widget').slice(0, 40)}.png`, type: r.tap.screenshot.type, data: r.tap.screenshot.data });
+    }
+    if (inc.some((r) => r.attach && r.tap.screenshot) && images.length === 6) $('#sendhint').textContent = 'screenshot cap: only the first 6 were attached';
+    sendBtn.disabled = true; sendBtn.textContent = 'Sending…';
+    let j = null;
+    try {
+      const res = await fetch('/api/pins', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ page: location.href, title: document.title, viewport: { w: innerWidth, h: innerHeight, dpr: devicePixelRatio }, general, to: 'worker', pins, images }) });
+      j = await res.json();
+    } catch {}
+    if (!j || !j.ok) {
+      sendBtn.textContent = 'Send to Claude'; refresh();
+      $('#sendhint').textContent = 'send failed: ' + ((j && (j.error + (j.hint ? ' — ' + j.hint : ''))) || 'server unreachable');
+      return;
+    }
+    const all = inc.length === taps.size;
+    for (const r of inc) { taps.delete(r.tap.n); r.el.remove(); }
+    $('#gen').value = '';
+    if (all) fetch('/api/flutter/clear', { method: 'POST' }); // nothing left worth replaying on refresh
+    $('#sendhint').textContent = `batch ${j.id} sent — the progress card tracks it; open the drawer to chat`;
+    const dr = window.__designReview;
+    if (dr && typeof dr.track === 'function') dr.track(j.id, pins.length);
+    refresh();
+  };
+})();
+</script>
+</body>
+</html>

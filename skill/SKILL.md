@@ -1,6 +1,6 @@
 ---
 name: pinpoint
-description: Live-code review loop — the user pins elements on the RUNNING app (localhost dev server) with the PINPOINT overlay, Claude receives the batch via the `pinpoint` MCP, resolves each pin to its source component, fixes it in place, and replies by pin number. Use when the user says "check my pins", "pinpoint", "I pinned something on the app", or wants to annotate a live page. ALSO use for `/pinpoint --install` and any phrasing like "wire pinpoint into this repo", "set up pinpoint for this project", "make this project use pinpoint", or "the Pinpoint pill isn't showing on my app" — that runs `pinpoint install`, which gives the repo its own pinpoint server port and handler-session name (.pinpoint.json → a session-dispatch handler must be named pinpoint_<project>) and wires the overlay into every Vite app. Mockups under `.docs/open-design` served by the pinpoint server ride the same loop (the worker edits the artifact, never app source); other static mockups are not this skill's job.
+description: Live-code review loop — the user pins elements on the RUNNING app (localhost dev server) with the PINPOINT overlay, Claude receives the batch via the `pinpoint` MCP, resolves each pin to its source component, fixes it in place, and replies by pin number. Use when the user says "check my pins", "pinpoint", "I pinned something on the app", or wants to annotate a live page. ALSO use for `/pinpoint --install` and any phrasing like "wire pinpoint into this repo", "set up pinpoint for this project", "make this project use pinpoint", or "the Pinpoint pill isn't showing on my app" — that runs `pinpoint install`, which gives the repo its own pinpoint server port and handler-session name (.pinpoint.json → a session-dispatch handler must be named pinpoint_<project>) and wires the overlay into every Vite app. Mockups under `.docs/open-design` served by the pinpoint server ride the same loop (the worker edits the artifact, never app source); other static mockups are not this skill's job. FLUTTER apps ride it too, with zero app code — `pinpoint flutter --vm-uri <the URI flutter run prints>` turns on the widget inspector's tap-to-select, taps arrive pre-resolved to source on the GET /flutter panel, and pins carry `source: {file, line, column}` instead of a DOM element (use for "pin the mobile app", "pinpoint on flutter", "tap-to-pin").
 ---
 
 # pinpoint — pin the live app, fix the source
@@ -67,6 +67,28 @@ foreign page from posting into one. Do not widen it.
 session explicitly, and *Headless worker* forces a worker for one batch. Other keys:
 `claudeBin` (path to the `claude` binary; default `which claude` → `~/.local/bin/claude`),
 `worker.args` (extra `claude` flags).
+
+## Flutter apps — tap-to-pin with zero app code
+
+A Flutter app has no DOM and no Vite, so nothing is injected into it. Instead, `pinpoint
+flutter --vm-uri <uri>` (the URI `flutter run` prints: "A Dart VM Service … is available
+at: http://127.0.0.1:PORT/TOKEN=/") connects to the app's VM service, turns on the widget
+inspector's on-device **select mode**, and resolves every tap to the widget's creation
+location (`--track-widget-creation`, the debug default — profile/release builds are refused).
+Each tap lands as a card on **`GET /flutter`** (the pinpoint server's own panel page, which
+carries the overlay for the progress card + chat drawer): widget type, `file:line`, a widget
+screenshot. The reviewer annotates and Sends — a normal batch whose pins carry
+`source: {file, line, column}` + `widget` instead of `element`, so the worker opens the file
+at the line instead of grepping. When every pin reaches a terminal status, the CLI triggers
+flutter_tools' full **hot reload** (recompile + reassemble) so the fix appears on the device;
+without a reload service (bare `dart`, `--no-dds`) it says to press `r` instead.
+
+Flags: `--app-root <dir>` (repeatable; default: nearest `pubspec.yaml` above cwd) scopes
+which taps are "ours" (framework-widget taps are skipped with a logged reason) and registers
+pub roots; `--port` overrides the pinpoint port; `--no-reload`; `--full-screenshots`.
+Taps not included in a Send stay on the panel for the next batch; the panel's select-mode
+toggle flips the device mode remotely. The worker must NOT run the app or hot reload —
+verification for flutter pins is `dart analyze` on the changed files.
 
 ## Many sessions — who gets the batch? (session dispatch)
 

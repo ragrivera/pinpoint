@@ -17,6 +17,9 @@ usage: pinpoint <command> [args]
                        PINPOINT_ROLE=http PINPOINT_DETACHED=1 for a standalone HTTP owner.
   report <batch> <pin> <working|done|skipped|question> [note] [--by <id>] [--dir <dir>]
                        write per-pin progress from a shell (the report_pin MCP tool's twin)
+  flutter --vm-uri <uri> [--app-root <dir>]... [--port <n>] [--no-reload] [--full-screenshots]
+                       tap-to-pin capture for a running Flutter debug app: taps on the device
+                       resolve to source (widget inspector) and land on the /flutter panel
   skill [--user] [--link] [--force]
                        copy (or link) the /pinpoint Claude Code skill into the repo or ~/.claude
   health               GET /api/health on this project's pinpoint port
@@ -43,6 +46,10 @@ switch (cmd) {
   case 'report': {
     const { run } = await import('../src/report.ts');
     process.exit(run(rest));
+  }
+  case 'flutter': {
+    const { run } = await import('../src/flutter.ts');
+    process.exit(await run(rest));
   }
   case 'skill': {
     const { run } = await import('../src/skill.ts');
