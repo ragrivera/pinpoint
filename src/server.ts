@@ -96,7 +96,7 @@ const WORKER_MCP_CFG = join(WORKERS_DIR, 'mcp.json');
 const BRAND = { name: 'Pinpoint', key: 'pinpoint', api: '/api/pins', sessions: '/api/sessions', chat: '/api/chat', dispatch: DISPATCH, server: 'pinpoint', port: PORT, requiredSession: STRICT ? REQUIRED_SESSION : null };
 
 // ─── Update check ─────────────────────────────────────────────────────────────
-// So people notice a newer pinpoint: at most once an hour — on owner start and whenever a worker
+// So people notice a newer pinpoint: at most once every 4 hours — on owner start and whenever a worker
 // (re)starts — `git ls-remote --tags` the package repo (the user's own git credentials, so a private
 // repo works too) and compare the highest vX.Y.Z tag with this package's version. Never blocks a
 // spawn (background, 8s cap); the result rides on /api/health and the overlay prelude, where the
@@ -104,7 +104,7 @@ const BRAND = { name: 'Pinpoint', key: 'pinpoint', api: '/api/pins', sessions: '
 // PINPOINT_UPDATE_REPO points the check at another remote (tests, forks).
 type UpdateInfo = { current: string; latest: string; available: boolean; checkedAt: string; repo: string; command: string };
 const UPDATE_CHECK = PROJECT.updateCheck !== false && process.env.PINPOINT_NO_UPDATE_CHECK !== '1';
-const UPDATE_EVERY_MS = 60 * 60_000;
+const UPDATE_EVERY_MS = 4 * 60 * 60_000;
 const repoSpec = String((pkg as any).repository?.url ?? (pkg as any).repository ?? '');
 const gh = /^github:([\w.-]+\/[\w.-]+)$/.exec(repoSpec);
 const UPDATE_REPO = process.env.PINPOINT_UPDATE_REPO || (gh ? `https://github.com/${gh[1]}.git` : repoSpec);
@@ -488,7 +488,7 @@ class Worker {
   }
   start(resume: boolean) {
     if (this.proc) return;
-    maybeCheckUpdate(); // a spawn is when someone is looking; hourly at most, never waits
+    maybeCheckUpdate(); // a spawn is when someone is looking; every 4 hours at most, never waits
     if (!existsSync(CLAUDE_BIN)) { this.setState('error', { text: `claude binary not found at ${CLAUDE_BIN} — set claudeBin in .pinpoint.json or PINPOINT_CLAUDE` }); return; }
     const args = [CLAUDE_BIN, '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '-n', `pin-${this.rec.batchId.slice(-24)}`];
     args.push(resume ? '--resume' : '--session-id', this.rec.sessionUuid);

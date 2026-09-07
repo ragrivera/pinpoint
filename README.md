@@ -85,7 +85,7 @@ overlay's progress card.
 `<root>/.docs/open-design`) with the overlay injected, so pins on a mockup ride the same worker + chat loop;
 the worker brief then edits the artifact's authoring source, never app code. Nothing else is served statically.
 
-**Updates.** Hourly at most — on server start and whenever a worker spawns — the server runs `git ls-remote --tags`
+**Updates.** Every 4 hours at most — on server start and whenever a worker spawns — the server runs `git ls-remote --tags`
 on this package's repo (your own git credentials, so a private repo works) and compares the highest `vX.Y.Z` tag
 with the installed version. A newer one shows as a `vX.Y.Z available` chip in the chat drawer's header (click
 copies the `bun add` command) and as `update` on `/api/health`. It never delays a spawn; `"updateCheck": false`
@@ -129,7 +129,7 @@ PINPOINT_DETACHED=1 PINPOINT_ROLE=http nohup bun run pinpoint serve > .docs/pinp
   "apps": [{ "dir": "apps/web", "origin": "http://localhost:5173" }],  // Origin allowlist + docs
   "claudeBin": "/usr/local/bin/claude",           // optional; default `which claude`, else ~/.local/bin/claude
   "worker": { "idleMinutes": 30, "mcp": "pinpoint", "args": [] },  // optional; mcp: "all" loads every user MCP
-  "updateCheck": true           // optional; false stops the hourly look at the package repo's tags for a newer pinpoint
+  "updateCheck": true           // optional; false stops the 4-hourly look at the package repo's tags for a newer pinpoint
 }
 ```
 

@@ -46,7 +46,7 @@ progress, turn results) and follow-ups typed there go to the same worker (`POST
 `>_` button, `POST /api/chat/:id/handoff`) ends it too and copies `cd <root> && claude --resume <session>`
 to the clipboard (a handoff card in the transcript confirms it), so the same Claude session
 carries on in a terminal. A `vX.Y.Z available` chip in the drawer header means the package repo
-has a newer tag (checked hourly at most, on start and worker spawns); clicking it copies the update command. A message in the drawer
+has a newer tag (checked every 4 hours at most, on start and worker spawns); clicking it copies the update command. A message in the drawer
 with no conversation selected starts a new worker for the page (sent as a note-only batch).
 Pins placed while the drawer is open ride along with the next message. Screenshots can be
 pasted or dropped into the drawer. `/` as the first character lists the skills and commands
