@@ -1165,6 +1165,8 @@
   .dr-chat-hd{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 12px 12px 16px;border-bottom:1px solid rgba(var(--dr-w),.07);user-select:none}
   .dr-chat-hd b{font:600 11px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--dr-fg);display:flex;align-items:center;gap:8px}
   .dr-chat-hd b .sub{color:var(--dr-fg3b);font-weight:500}
+  .dr-chat-upd{margin-left:2px;padding:3px 7px;border-radius:999px;border:1px solid rgba(255,180,87,.45);background:rgba(255,180,87,.12);color:#ffb457;font:600 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.05em;text-transform:none;cursor:pointer;white-space:nowrap}
+  .dr-chat-upd:hover{background:rgba(255,180,87,.22)}
   .dr-chat-hd .r{display:flex;align-items:center;gap:6px}
   .dr-chat-bar{display:flex;gap:6px;align-items:center;padding:8px 12px;border-bottom:1px solid rgba(var(--dr-w),.07)}
   .dr-chat-sel{flex:1;min-width:0;position:relative}
@@ -1420,6 +1422,9 @@
     chatEl.addEventListener('pointerleave', () => { chatHover = false; chatApply(); });
     const hd = el('div', 'dr-chat-hd');
     const ttl = el('b'); ttl.append(document.createTextNode(BRAND.name), el('span', 'sub', 'chat'));
+    const upd = el('button', 'dr-chat-upd'); upd.type = 'button'; upd.style.display = 'none'; ttl.append(upd); chatEl._upd = upd; // "vX.Y.Z available" — click copies the update command
+    upd.onclick = () => { if (!chatUpdate || !chatUpdate.command) return; clipWrite(chatUpdate.command).then((ok) => { upd.textContent = ok ? 'update command copied' : chatUpdate.command; setTimeout(updSync, 1600); }); };
+    updSync();
     const r = el('div', 'r');
     const ann = el('button', 'dr-ann'); const d2 = el('i', 'dr-dot'); ann.append(d2, document.createTextNode('annotate')); ann.title = 'Toggle annotate mode (R)'; ann.onclick = toggle; chatEl._dot = d2; chatEl._ann = ann;
     const nw = el('button', 'dr-fp-min', '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>'); nw.setAttribute('aria-label', 'New conversation'); nw.title = 'New conversation — your message starts a fresh worker for this page'; nw.onclick = () => selectConvo(null);
@@ -1687,7 +1692,11 @@
   // transcript is the confirmation (the progress stack's toasts hide while the drawer is open). The root comes from
   // /api/health (fetched when the drawer is built); the session id rides on each /api/chat row.
   let chatRoot = '';
-  const loadRoot = () => fetch(API + '/api/health').then((r) => r.json()).then((h) => { if (h && h.root) chatRoot = String(h.root); }).catch(() => {});
+  const loadRoot = () => fetch(API + '/api/health').then((r) => r.json()).then((h) => { if (h && h.root) chatRoot = String(h.root); chatUpdate = h && h.update && h.update.available ? h.update : null; updSync(); }).catch(() => {});
+  // Newer pinpoint available? The server checks its package repo's tags (hourly at most: on start and when a worker
+  // spawns) and reports on /api/health and the prelude; the header chip shows it and copies the update command on click.
+  let chatUpdate = BRAND.update && BRAND.update.available ? BRAND.update : null;
+  const updSync = () => { const b = chatEl && chatEl._upd; if (!b) return; b.style.display = chatUpdate ? '' : 'none'; if (chatUpdate) { b.textContent = 'v' + chatUpdate.latest + ' available'; b.title = 'Newer pinpoint: ' + chatUpdate.current + ' \u2192 ' + chatUpdate.latest + '. Click to copy the update command: ' + chatUpdate.command; } };
   const shq = (s) => (/^[\w./-]+$/.test(s) ? s : "'" + s.replace(/'/g, "'\\''") + "'");
   const clipWrite = (text) => { const fb = () => { const ta = document.createElement('textarea'); ta.value = text; ta.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); let ok = false; try { ok = document.execCommand('copy'); } catch (err) {} ta.remove(); return ok; }; return navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(text).then(() => true, () => fb()) : Promise.resolve(fb()); };
   async function handoffConvo() {

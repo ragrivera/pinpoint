@@ -10,6 +10,7 @@ export type PinpointConfig = {
   apps?: PinpointApp[];
   claudeBin?: string;
   worker?: { idleMinutes?: number; mcp?: 'pinpoint' | 'all'; args?: string[] };
+  updateCheck?: boolean;
   installedAt?: string;
   [key: string]: unknown;
 };

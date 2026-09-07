@@ -59,13 +59,13 @@ import { findProject as findProjectFile } from './config.js';
 import pkg from '../package.json';
 
 type WorkerCfg = { idleMinutes?: number; mcp?: 'pinpoint' | 'all'; args?: string[] };
-type Project = { root: string; port?: number; name?: string; file?: string; dispatch?: 'worker' | 'session'; claudeBin?: string; worker?: WorkerCfg; origins: string[] };
+type Project = { root: string; port?: number; name?: string; file?: string; dispatch?: 'worker' | 'session'; claudeBin?: string; worker?: WorkerCfg; origins: string[]; updateCheck?: boolean };
 function findProject(from: string): Project {
   const { root, file, config: j } = findProjectFile(from);
   if (!file) return { root: resolve(from), origins: [] };
   if (!j) return { root, file, origins: [] }; // unreadable file: still marks the root
   const origins = Array.isArray(j.apps) ? j.apps.map((a: any) => String(a?.origin || '')).filter(Boolean).map((o: string) => { try { return new URL(o).origin; } catch { return ''; } }).filter(Boolean) : [];
-  return { root, port: Number(j.port) || undefined, name: typeof j.name === 'string' && j.name ? j.name : undefined, file, dispatch: j.dispatch === 'session' || j.dispatch === 'worker' ? j.dispatch : undefined, claudeBin: typeof j.claudeBin === 'string' ? j.claudeBin : undefined, worker: j.worker && typeof j.worker === 'object' ? j.worker : undefined, origins };
+  return { root, port: Number(j.port) || undefined, name: typeof j.name === 'string' && j.name ? j.name : undefined, file, dispatch: j.dispatch === 'session' || j.dispatch === 'worker' ? j.dispatch : undefined, claudeBin: typeof j.claudeBin === 'string' ? j.claudeBin : undefined, worker: j.worker && typeof j.worker === 'object' ? j.worker : undefined, origins, updateCheck: j.updateCheck !== false };
 }
 const PROJECT = findProject(process.env.PINPOINT_ROOT || process.cwd());
 const ROOT = PROJECT.root;
@@ -95,6 +95,44 @@ const WORKERS_DIR = join(ROOT, '.docs', 'pinpoint', 'workers');
 const WORKER_MCP_CFG = join(WORKERS_DIR, 'mcp.json');
 const BRAND = { name: 'Pinpoint', key: 'pinpoint', api: '/api/pins', sessions: '/api/sessions', chat: '/api/chat', dispatch: DISPATCH, server: 'pinpoint', port: PORT, requiredSession: STRICT ? REQUIRED_SESSION : null };
 
+// ─── Update check ─────────────────────────────────────────────────────────────
+// So people notice a newer pinpoint: at most once an hour — on owner start and whenever a worker
+// (re)starts — `git ls-remote --tags` the package repo (the user's own git credentials, so a private
+// repo works too) and compare the highest vX.Y.Z tag with this package's version. Never blocks a
+// spawn (background, 8s cap); the result rides on /api/health and the overlay prelude, where the
+// drawer shows a chip. Off with "updateCheck": false in .pinpoint.json or PINPOINT_NO_UPDATE_CHECK=1;
+// PINPOINT_UPDATE_REPO points the check at another remote (tests, forks).
+type UpdateInfo = { current: string; latest: string; available: boolean; checkedAt: string; repo: string; command: string };
+const UPDATE_CHECK = PROJECT.updateCheck !== false && process.env.PINPOINT_NO_UPDATE_CHECK !== '1';
+const UPDATE_EVERY_MS = 60 * 60_000;
+const repoSpec = String((pkg as any).repository?.url ?? (pkg as any).repository ?? '');
+const gh = /^github:([\w.-]+\/[\w.-]+)$/.exec(repoSpec);
+const UPDATE_REPO = process.env.PINPOINT_UPDATE_REPO || (gh ? `https://github.com/${gh[1]}.git` : repoSpec);
+const semver = (v: string) => { const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(v); return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null; };
+const semverCmp = (a: string, b: string) => { const x = semver(a), y = semver(b); if (!x || !y) return 0; for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
+let update: UpdateInfo | null = null;
+let updateCheckedAt = 0, updateRunning = false;
+async function checkUpdate(): Promise<UpdateInfo | null> {
+  const proc = Bun.spawn(['git', 'ls-remote', '--tags', '--refs', UPDATE_REPO], { stdout: 'pipe', stderr: 'ignore', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+  const timer = setTimeout(() => { try { proc.kill(); } catch {} }, 8_000);
+  const out = await new Response(proc.stdout).text().catch(() => '');
+  clearTimeout(timer);
+  if ((await proc.exited) !== 0) return null;
+  const tags = out.split('\n').map((l) => l.split('refs/tags/')[1] || '').filter((t) => semver(t));
+  if (!tags.length) return null;
+  const latest = tags.sort(semverCmp).pop()!.replace(/^v/, '');
+  const spec = gh ? `github:${gh[1]}#v${latest}` : `${pkg.name}@${latest}`;
+  return { current: pkg.version, latest, available: semverCmp(latest, pkg.version) > 0, checkedAt: new Date().toISOString(), repo: UPDATE_REPO, command: `bun add -D ${spec}` };
+}
+function maybeCheckUpdate() {
+  if (!UPDATE_CHECK || !UPDATE_REPO || updateRunning || Date.now() - updateCheckedAt < UPDATE_EVERY_MS) return;
+  updateRunning = true; updateCheckedAt = Date.now();
+  checkUpdate().then((u) => {
+    if (u && (!update || update.latest !== u.latest)) log(u.available ? `update available: ${pkg.name} ${u.current} → ${u.latest}  (${u.command})` : `up to date: ${pkg.name} ${u.current}`);
+    if (u) update = u;
+  }).catch(() => {}).finally(() => { updateRunning = false; });
+}
+
 // ─── Session identity ─────────────────────────────────────────────────────────
 type Session = { id: string; label: string; cwd: string; seenAt: number };
 const HTTP_ONLY = process.env.PINPOINT_ROLE === 'http';
@@ -114,7 +152,7 @@ const registry = new Map<string, Session>(); // only meaningful on the HTTP owne
 function upsertSession(s: Omit<Session, 'seenAt'>) { registry.set(s.id, { ...s, seenAt: Date.now() }); }
 function liveSessions(): Session[] { const now = Date.now(); return [...registry.values()].filter((s) => now - s.seenAt < SESSION_TTL_MS).sort((a, b) => a.label.localeCompare(b.label)); }
 // Read per request so overlay edits are live without restarting the MCP.
-const overlay = () => `window.__reviewBrand = ${JSON.stringify(BRAND)};\n` + readFileSync(OVERLAY_PATH, 'utf8');
+const overlay = () => `window.__reviewBrand = ${JSON.stringify({ ...BRAND, update })};\n` + readFileSync(OVERLAY_PATH, 'utf8');
 
 // ─── Open-design artifacts ────────────────────────────────────────────────────
 // Mockup explorers under <root>/.docs/open-design are served from here with the overlay
@@ -450,6 +488,7 @@ class Worker {
   }
   start(resume: boolean) {
     if (this.proc) return;
+    maybeCheckUpdate(); // a spawn is when someone is looking; hourly at most, never waits
     if (!existsSync(CLAUDE_BIN)) { this.setState('error', { text: `claude binary not found at ${CLAUDE_BIN} — set claudeBin in .pinpoint.json or PINPOINT_CLAUDE` }); return; }
     const args = [CLAUDE_BIN, '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '-n', `pin-${this.rec.batchId.slice(-24)}`];
     args.push(resume ? '--resume' : '--session-id', this.rec.sessionUuid);
@@ -615,7 +654,7 @@ try {
       const CORS = corsFor(req);
       if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
       if (req.method === 'GET') { const art = serveArtifact(url.pathname); if (art) return art; }
-      if (url.pathname === '/api/health') return Response.json({ ok: true, root: ROOT, port: PORT, project: PROJECT.file ?? null, name: PROJECT_NAME, dispatch: DISPATCH, claudeBin: CLAUDE_BIN, requiredSession: STRICT ? REQUIRED_SESSION : null, feedbackDir: FEEDBACK_DIR, sessions: liveSessions().length, handlers: handlers().length, workers: [...workers.values()].filter((w) => w.proc).length }, { headers: CORS });
+      if (url.pathname === '/api/health') return Response.json({ ok: true, root: ROOT, port: PORT, project: PROJECT.file ?? null, name: PROJECT_NAME, dispatch: DISPATCH, claudeBin: CLAUDE_BIN, requiredSession: STRICT ? REQUIRED_SESSION : null, feedbackDir: FEEDBACK_DIR, sessions: liveSessions().length, handlers: handlers().length, workers: [...workers.values()].filter((w) => w.proc).length, update }, { headers: CORS });
       if (url.pathname === '/api/skills' && req.method === 'GET') return Response.json(listSkills(), { headers: CORS });
       if (url.pathname === '/api/pins' && req.method === 'POST') {
         try { const b = receive(await req.json()); return Response.json({ ok: true, id: b.id, worker: Boolean((b as any).worker) }, { headers: CORS }); }
@@ -666,6 +705,7 @@ if (httpOwner) {
   log(`http://127.0.0.1:${PORT}  pins → ${FEEDBACK_DIR}  dispatch=${DISPATCH}`);
   writeWorkerMcpCfg();
   loadWorkers();
+  maybeCheckUpdate();
   if (DISPATCH === 'worker' && !existsSync(CLAUDE_BIN)) log(`WARNING: claude binary not found at ${CLAUDE_BIN}; worker dispatch will fail (set claudeBin in .pinpoint.json)`);
 }
 if (SELF) {
