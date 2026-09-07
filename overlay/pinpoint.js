@@ -1191,6 +1191,7 @@
   .dr-chat .m .qstep{display:none}.dr-chat .m .qstep.on,.dr-chat .m .qa.answered .qstep{display:block}
   .dr-chat .m .qa.answered .qstep+.qstep{margin-top:10px;padding-top:10px;border-top:1px solid rgba(var(--dr-w),.08)}
   .dr-chat .m .qq{font-weight:600;color:var(--dr-fg);margin-bottom:8px}
+  .dr-chat .m .qhint{margin-left:8px;font:600 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--dr-fg3b)}
   .dr-chat .m .qo{display:flex;flex-direction:column;gap:6px}
   .dr-chat .m .qb{text-align:left;cursor:pointer;border:1px solid rgba(var(--dr-w),.14);background:rgba(var(--dr-w),.06);color:var(--dr-fg);font:12px/1.4 ui-monospace,Menlo,SFMono-Regular,monospace;border-radius:8px;padding:7px 10px;transition:background .12s,border-color .12s}
   .dr-chat .m .qb:hover,.dr-chat .m .qb:focus-visible{background:rgba(var(--dr-w),.12);border-color:rgba(var(--dr-w),.26);outline:none}
@@ -1348,19 +1349,21 @@
   // ```question blocks from a worker (first line(s) the question, each "- " line a choice). All the blocks of one
   // message form ONE stepper: a question at a time with Back / Next, a free-text field on every step, and a single
   // Submit at the end that sends every answer in one message (chatAnswer). A lone block is just its Submit.
-  const parseQuestion = (body) => {
+  // A ```question multi block lets several choices be picked; they are sent joined with " + ".
+  const MULTI_SEP = ' + ';
+  const parseQuestion = (body, multi) => {
     const q = [], o = [];
     body.split('\n').forEach((l) => { const m = /^\s*(?:[-*]|\d+[.)])\s+(.+?)\s*$/.exec(l); if (m) o.push(m[1]); else if (l.trim() && !o.length) q.push(l.trim()); });
-    return o.length ? { q: q.join(' '), o } : null;
+    return o.length ? { q: q.join(' '), o, multi: Boolean(multi) } : null;
   };
   const stepperHtml = (qs) => {
     const n = qs.length;
-    const steps = qs.map((x, i) => `<div class="qstep${i === 0 ? ' on' : ''}" data-i="${i}" data-q="${esc(x.q)}">${x.q ? '<div class="qq">' + inline(x.q) + '</div>' : ''}<div class="qo">${x.o.map((c) => '<button type="button" class="qb" data-a="' + esc(c) + '">' + inline(c) + '</button>').join('')}</div><form class="qf"><input class="qi" type="text" placeholder="Type your own, or add a note\u2026" autocomplete="off" spellcheck="false"></form></div>`).join('');
+    const steps = qs.map((x, i) => `<div class="qstep${i === 0 ? ' on' : ''}" data-i="${i}" data-q="${esc(x.q)}"${x.multi ? ' data-multi="1"' : ''}>${x.q || x.multi ? '<div class="qq">' + inline(x.q) + (x.multi ? '<span class="qhint">pick any</span>' : '') + '</div>' : ''}<div class="qo">${x.o.map((c) => '<button type="button" class="qb" data-a="' + esc(c) + '">' + inline(c) + '</button>').join('')}</div><form class="qf"><input class="qi" type="text" placeholder="Type your own, or add a note\u2026" autocomplete="off" spellcheck="false"></form></div>`).join('');
     const nav = n > 1 ? `<div class="qnav"><span class="qpos">1 of ${n}</span></div>` : '';
     const act = `<div class="qact">${n > 1 ? '<button type="button" class="qback" style="visibility:hidden">Back</button>' : ''}<span class="sp"></span>${n > 1 ? '<button type="button" class="qnext">Next</button>' : ''}<button type="button" class="qsub"${n > 1 ? ' style="display:none"' : ''}>Submit</button></div>`;
     return `<div class="qa" data-n="${n}">${nav}${steps}${act}</div>`;
   };
-  const stepAnswer = (st) => { const b = st.querySelector('.qb.on'), inp = st.querySelector('.qi'); return { choice: b ? b.dataset.a || b.textContent.trim() : '', typed: inp ? inp.value.trim() : '' }; };
+  const stepAnswer = (st) => { const on = [...st.querySelectorAll('.qb.on')].map((b) => b.dataset.a || b.textContent.trim()), inp = st.querySelector('.qi'); return { choice: st.dataset.multi ? on.join(MULTI_SEP) : on[0] || '', typed: inp ? inp.value.trim() : '' }; };
   function stepSync(qa) {
     const steps = [...qa.querySelectorAll('.qstep')], cur = steps.findIndex((x) => x.classList.contains('on')), last = cur === steps.length - 1;
     const pos = qa.querySelector('.qpos'); if (pos) pos.textContent = (cur + 1) + ' of ' + steps.length;
@@ -1377,7 +1380,7 @@
   }
   const md = (v) => { const qs = []; const html = mdParts(v, qs); return html.replace(/(<br>)+$/, '') + (qs.length ? stepperHtml(qs) : ''); };
   const mdParts = (v, qs) => String(v == null ? '' : v).split(/```/).map((part, i) => {
-    if (i % 2) { const qm = /^question[ \t]*\r?\n([\s\S]*)$/.exec(part); if (qm) { const q = parseQuestion(qm[1]); if (q) { qs.push(q); return ''; } return `<pre>${esc(qm[1])}</pre>`; } return `<div class="cb"><pre>${esc(part.replace(/^[a-z]*\n/, ''))}</pre><button class="cp" type="button" title="Copy to clipboard">copy</button></div>`; }
+    if (i % 2) { const qm = /^question(?:[ \t]+(multi))?[ \t]*\r?\n([\s\S]*)$/.exec(part); if (qm) { const q = parseQuestion(qm[2], qm[1]); if (q) { qs.push(q); return ''; } return `<pre>${esc(qm[2])}</pre>`; } return `<div class="cb"><pre>${esc(part.replace(/^[a-z]*\n/, ''))}</pre><button class="cp" type="button" title="Copy to clipboard">copy</button></div>`; }
     const ls = part.split('\n'), out = [];
     for (let j = 0; j < ls.length; j++) {
       if (isRow(ls[j]) && /^\s*\|?(\s*:?-+:?\s*\|)+\s*(:?-+:?\s*)?\|?\s*$/.test(ls[j + 1] || '')) { // header | separator | rows
@@ -1498,7 +1501,7 @@
       const t = e.target; if (t instanceof HTMLImageElement && t.closest('.imgs')) return openLightbox(t.src, t.alt, t.getBoundingClientRect());
       const cp = t instanceof Element ? t.closest('.cp') : null; if (cp) { const pre = cp.parentElement && cp.parentElement.querySelector('pre'); copyText(pre ? pre.textContent : '', cp); return; }
       const qb = t instanceof Element ? t.closest('.qb') : null;
-      if (qb) { const qa = qb.closest('.qa'), st = qb.closest('.qstep'); if (qa && st && !qa.classList.contains('answered')) { const was = qb.classList.contains('on'); st.querySelectorAll('.qb').forEach((b) => b.classList.remove('on')); if (!was) qb.classList.add('on'); } return; }
+      if (qb) { const qa = qb.closest('.qa'), st = qb.closest('.qstep'); if (qa && st && !qa.classList.contains('answered')) { if (st.dataset.multi) qb.classList.toggle('on'); else { const was = qb.classList.contains('on'); st.querySelectorAll('.qb').forEach((b) => b.classList.remove('on')); if (!was) qb.classList.add('on'); } } return; }
       const nb = t instanceof Element ? t.closest('.qback, .qnext, .qsub') : null;
       if (nb) { const qa = nb.closest('.qa'); if (!qa || qa.classList.contains('answered')) return; if (nb.classList.contains('qback')) stepGo(qa, -1); else if (nb.classList.contains('qnext')) stepGo(qa, 1); else chatAnswer(qa); }
     });
@@ -1574,11 +1577,21 @@
       steps.forEach((st) => {
         let ans = all.trim();
         if (steps.length > 1) { const q = st.dataset.q || ''; const l = q ? lines.find((x) => x.startsWith(q + ' \u2192 ')) : null; ans = l ? l.slice(q.length + 3).trim() : ''; }
-        const parts = steps.length === 1 ? ans.split('\n') : ans.split(' \u00b7 ');
-        const first = (parts[0] || '').trim(), rest = parts.slice(1).join(steps.length === 1 ? '\n' : ' \u00b7 ').trim();
-        let hit = null; st.querySelectorAll('.qb').forEach((b) => { b.classList.remove('on'); if (!hit && (b.dataset.a || '') === first) hit = b; });
-        if (hit) hit.classList.add('on');
-        const inp = st.querySelector('.qi'), slot = st.querySelector('.qf'), typed = hit ? rest : ans;
+        // Consume the answer label by label (longest match first, so a label may itself contain " \u00b7 " or
+        // " + "); multi steps chain picks with MULTI_SEP; whatever is left after the note separator is typed text.
+        const labels = [...st.querySelectorAll('.qb')].map((b) => b.dataset.a || '').filter(Boolean).sort((a, b) => b.length - a.length);
+        const noteSep = steps.length === 1 ? '\n' : ' \u00b7 ';
+        const picks = []; let rest = ans;
+        for (;;) {
+          const l = labels.find((x) => rest.startsWith(x) && !picks.includes(x)); if (!l) break;
+          picks.push(l); rest = rest.slice(l.length);
+          if (st.dataset.multi && rest.startsWith(MULTI_SEP)) { rest = rest.slice(MULTI_SEP.length); continue; }
+          break;
+        }
+        if (picks.length && rest.startsWith(noteSep)) rest = rest.slice(noteSep.length);
+        const typed = rest.trim();
+        st.querySelectorAll('.qb').forEach((b) => b.classList.toggle('on', picks.includes(b.dataset.a || '')));
+        const inp = st.querySelector('.qi'), slot = st.querySelector('.qf');
         if (inp && typed) { inp.value = typed; if (slot) slot.classList.add('on'); }
       });
     });
