@@ -50,6 +50,11 @@
   .toggle .tk::after { content:''; position:absolute; top:2px; left:2px; width:15px; height:15px; border-radius:50%; background:var(--dim); transition:left .15s, background .15s; }
   .toggle.on .tk { background:var(--acc); }
   .toggle.on .tk::after { left:17px; background:#fff; }
+  /* The panel loads /pinpoint.js only for the progress card (.dr-sn) and the chat drawer
+     (.dr-chat) that appear after a Send. Its DOM-pinning chrome — the floating annotate
+     panel/pill (.dr-fp) and the bottom dock (.dr-dock*) — does nothing on a Flutter page,
+     so hide it here; taps come from the device, not from clicking this page. */
+  .dr-fp, .dr-dock, .dr-dock-tip, .dr-dock-fly { display:none !important; }
 </style>
 </head>
 <body>
