@@ -8,11 +8,11 @@
   :root { --bg:#0f1115; --card:#181b22; --line:#262b36; --txt:#e6e9ef; --dim:#8b93a5; --acc:#5b8cff; --ok:#3fb96f; --warn:#e0a63c; --err:#e05c5c; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--txt); font:14px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }
-  header { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:12px; padding:12px 18px; background:var(--bg); border-bottom:1px solid var(--line); }
-  header h1 { font-size:15px; margin:0; font-weight:650; }
+  header { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:10px 12px; flex-wrap:wrap; padding:12px 18px; background:var(--bg); border-bottom:1px solid var(--line); }
+  header h1 { font-size:15px; margin:0; font-weight:650; flex:none; }
   .dot { width:9px; height:9px; border-radius:50%; background:var(--err); flex:none; }
   .dot.on { background:var(--ok); }
-  .who { color:var(--dim); font-size:12px; margin-right:auto; }
+  .who { color:var(--dim); font-size:12px; margin-right:auto; min-width:0; flex:1 1 120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   button { background:var(--card); color:var(--txt); border:1px solid var(--line); border-radius:8px; padding:6px 12px; font:inherit; font-size:13px; cursor:pointer; }
   button:hover { border-color:var(--dim); }
   button.primary { background:var(--acc); border-color:var(--acc); color:#fff; font-weight:600; }
@@ -57,6 +57,7 @@
   .drop-hi { outline:2px dashed var(--acc); outline-offset:-6px; }
   .sendrow { display:flex; align-items:center; gap:12px; margin:16px 0 60px; }
   .hint { color:var(--dim); font-size:12px; }
+  header > button, header .chip, header .toggle { flex:none; }
   .toggle { display:flex; align-items:center; gap:7px; font-size:13px; color:var(--dim); cursor:pointer; user-select:none; }
   .toggle .tk { width:34px; height:19px; border-radius:99px; background:var(--line); position:relative; transition:background .15s; }
   .toggle .tk::after { content:''; position:absolute; top:2px; left:2px; width:15px; height:15px; border-radius:50%; background:var(--dim); transition:left .15s, background .15s; }
@@ -67,6 +68,28 @@
      panel/pill (.dr-fp) and the bottom dock (.dr-dock*) — does nothing on a Flutter page,
      so hide it here; taps come from the device, not from clicking this page. */
   .dr-fp, .dr-dock, .dr-dock-tip, .dr-dock-fly { display:none !important; }
+
+  /* Tablet & phone: keep everything inside the viewport, stack what doesn't fit. */
+  @media (max-width: 768px) {
+    main { padding:14px; }
+    .card { padding:12px; gap:12px; }
+    .rowtop { flex-wrap:wrap; }
+    .uhead { flex-wrap:wrap; }
+  }
+  @media (max-width: 560px) {
+    header { padding:10px 14px; gap:8px 10px; }
+    header h1 { font-size:14px; }
+    .who { order:5; flex-basis:100%; margin:0; }          /* status drops to its own line, controls stay on top row */
+    main { padding:12px; }
+    .card { flex-direction:column; }                       /* screenshot above the body on narrow phones */
+    .shot { width:100%; }
+    .shot img, .shot .noimg { max-width:140px; width:auto; }
+    .types { gap:5px; }
+    .types button { padding:4px 9px; }                     /* a touch bigger for touch targets */
+    .sendrow { flex-direction:column; align-items:stretch; gap:8px; }
+    .sendrow .hint { text-align:center; }
+    button.primary { padding:11px 14px; }                  /* full-width, thumb-friendly Send */
+  }
 </style>
 </head>
 <body>
