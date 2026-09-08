@@ -193,10 +193,14 @@ export class Inspector {
  *  reassemble). DDS replays existing registrations to new Service-stream subscribers, so
  *  subscribe-then-wait suffices. Returns the namespaced method (e.g. "s0.reloadSources"),
  *  or null when nothing registered it (bare `dart`, --no-dds — degrade to "press r"). */
-export async function findReloadService(c: VmClient, waitMs = 2_500): Promise<string | null> {
+export async function findReloadService(c: VmClient, waitMs = 6_000): Promise<string | null> {
   let method: string | null = null;
-  await c.streamListen('Service');
+  // Attach the listener BEFORE subscribing: DDS replays the current ServiceRegistered set to a
+  // new Service-stream subscriber, and those notifications can arrive the instant streamListen
+  // returns — a listener attached afterwards would miss them. The wait is generous because right
+  // after `flutter run` prints its URI, flutter_tools may not have registered the service yet.
   c.onEvent('Service', (ev) => { if (ev.kind === 'ServiceRegistered' && (ev as any).service === 'reloadSources') method = String((ev as any).method || '') || null; });
+  await c.streamListen('Service');
   const end = Date.now() + waitMs;
   while (!method && Date.now() < end) await new Promise((r) => setTimeout(r, 100));
   return method;

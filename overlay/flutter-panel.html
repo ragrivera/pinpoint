@@ -23,8 +23,10 @@
   main { max-width:860px; margin:0 auto; padding:18px; }
   .empty { color:var(--dim); text-align:center; padding:70px 20px; }
   .empty b { color:var(--txt); }
-  .card { display:flex; gap:14px; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
+  .card { position:relative; display:flex; gap:14px; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
   .card.off { opacity:.45; }
+  .card .rm { position:absolute; top:8px; right:8px; width:26px; height:26px; padding:0; line-height:1; border-radius:7px; color:var(--dim); font-size:16px; display:flex; align-items:center; justify-content:center; }
+  .card .rm:hover { color:var(--err); border-color:var(--err); }
   .shot { flex:none; width:96px; }
   .shot img { max-width:96px; max-height:120px; border-radius:8px; border:1px solid var(--line); background:#fff; display:block; }
   .shot .noimg { width:96px; height:72px; border-radius:8px; border:1px dashed var(--line); display:flex; align-items:center; justify-content:center; color:var(--dim); font-size:11px; }
@@ -90,6 +92,7 @@
   const cards = $('#cards'), empty = $('#empty'), dot = $('#dot'), who = $('#who');
   const sendBtn = $('#send'), reloadChip = $('#reload'), selToggle = $('#selToggle');
   const taps = new Map(); // n -> { tap, el, type, include, attach }
+  const removed = new Set(); // tap numbers the reviewer dismissed — kept so an SSE replay won't re-add them
   let selectOn = true;
 
   const refresh = () => {
@@ -100,7 +103,7 @@
   };
 
   const addCard = (tap) => {
-    if (taps.has(tap.n)) return;
+    if (taps.has(tap.n) || removed.has(tap.n)) return;
     const el = document.createElement('div');
     el.className = 'card';
     const src = `${tap.source.file}:${tap.source.line}`;
@@ -119,6 +122,10 @@
       </div>`;
     $('.widget', el).textContent = tap.widget || 'widget';
     $('.src', el).textContent = src;
+    const rm = document.createElement('button');
+    rm.className = 'rm'; rm.type = 'button'; rm.title = 'Remove this pin'; rm.textContent = '×';
+    rm.onclick = () => { removed.add(tap.n); taps.delete(tap.n); el.remove(); refresh(); };
+    el.append(rm);
     const rec = { tap, el, type: '', include: true, attach: Boolean(tap.screenshot) };
     for (const b of el.querySelectorAll('.types button')) b.onclick = () => {
       rec.type = rec.type === b.dataset.t ? '' : b.dataset.t;
@@ -143,7 +150,7 @@
     let e; try { e = JSON.parse(m.data); } catch { return; }
     if (e.t === 'client') setClient(e);
     else if (e.t === 'tap') addCard(e.tap);
-    else if (e.t === 'cleared') { taps.clear(); cards.innerHTML = ''; refresh(); }
+    else if (e.t === 'cleared') { taps.clear(); removed.clear(); cards.innerHTML = ''; refresh(); }
     else if (e.t === 'select') setSelect(Boolean(e.on));
     else if (e.t === 'reloaded') {
       reloadChip.hidden = false;
