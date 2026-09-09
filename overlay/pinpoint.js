@@ -25,9 +25,15 @@
   // adopts ITS model here, so the pill always names the model you are actually working with.
   const MODELS = Array.isArray(BRAND.models) && BRAND.models.length ? BRAND.models : [];
   const MODEL_KEY = BRAND.key + ':model';
+  const DEFAULT_NOTE = (MODELS.find((m) => !m.id) || {}).note || '';
   const modelPref = () => { let v = null; try { v = localStorage.getItem(MODEL_KEY); } catch (e) {} return v !== null && MODELS.some((m) => m.id === v) ? v : (BRAND.model || ''); };
   const setModelPref = (v) => { try { localStorage.setItem(MODEL_KEY, v); } catch (e) {} };
   const modelLabel = (v) => { const m = MODELS.find((x) => x.id === (v || '')); return m ? m.label : (v || 'Default'); };
+  // "Default" names a setting, not a model. The worker's "ready" event carries the id the claude
+  // binary actually resolved to, so the pill can name it instead of the word Default.
+  let liveModel = '';
+  const prettyModel = (id) => { const s = String(id || '').trim(); const m = MODELS.find((x) => x.id && x.id === s); return m ? m.label : s.replace(/^claude-/, '').replace(/-\d{8}\b/, '').replace(/^([a-z]+)-/, '$1 ').replace(/-(?=\d)/g, '.').replace(/-/g, ' ').trim(); };
+  const modelInUse = (v) => (v ? modelLabel(v) : prettyModel(liveModel) || modelLabel(''));
   let modelLine = null; // the panel's "Model:" line, re-synced when the drawer's pill moves
   const CONTINUE_MS = 30 * 60 * 1000;
   let convoTarget = null, convoForceNew = false, convoLine = null;
@@ -589,7 +595,7 @@
       const menu = el('div', 'dr-to'); menu.style.display = 'none'; menu.setAttribute('role', 'listbox');
       modelLine = () => {
         const cur = modelPref();
-        who.textContent = 'Model: ' + modelLabel(cur);
+        who.textContent = 'Model: ' + modelInUse(cur);
         menu.innerHTML = '';
         MODELS.forEach((m) => {
           const on = m.id === cur;
@@ -1737,9 +1743,9 @@
   function modelSync() {
     if (!chatModel) return;
     const cur = modelPref();
-    chatModel._tg.innerHTML = '<span class="lb">' + esc(modelLabel(cur)) + '</span><i class="chev"></i>';
-    chatModel._tg.title = 'Model the worker runs — ' + modelLabel(cur) + (cur ? ' (claude --model ' + cur + ')' : ' (the claude binary\'s own default)');
-    chatModel._menu.querySelectorAll('.it').forEach((it) => { const on = (it.dataset.model || '') === cur; it.setAttribute('aria-selected', String(on)); it.querySelector('.ck').innerHTML = on ? '&#10003;' : ''; });
+    chatModel._tg.innerHTML = '<span class="lb">' + esc(modelInUse(cur)) + '</span><i class="chev"></i>';
+    chatModel._tg.title = 'Model the worker runs — ' + modelInUse(cur) + (cur ? ' (claude --model ' + cur + ')' : liveModel ? ' (the claude binary\'s own default — ' + liveModel + ')' : ' (the claude binary\'s own default)');
+    chatModel._menu.querySelectorAll('.it').forEach((it) => { const id = it.dataset.model || '', on = id === cur; it.setAttribute('aria-selected', String(on)); it.querySelector('.ck').innerHTML = on ? '&#10003;' : ''; const d = id ? null : it.querySelector('.d'); if (d) d.textContent = liveModel ? 'running ' + prettyModel(liveModel) : DEFAULT_NOTE; });
   }
   async function pickModel(id) {
     setModelPref(id); modelSync(); if (modelLine) modelLine();
@@ -1809,6 +1815,7 @@
   async function loadConvos() { try { const r = await fetch(API + BRAND.chat); chatConvos = r.ok ? await r.json() : []; } catch (e) { chatConvos = []; } fillConvos(); }
   function selectConvo(id) {
     if (chatEs) { chatEs.close(); chatEs = null; }
+    liveModel = ''; // re-learned from this conversation's own "ready" event on replay
     chatUi.cur = id || null; chatSave(); if (AUTO_WORKER) refreshConvoTarget();
     const row = id ? chatConvos.find((c) => c.id === id) : null; // the pill names the model in use here
     if (row && typeof row.model === 'string' && row.model !== modelPref()) { setModelPref(row.model); if (modelLine) modelLine(); }
@@ -1820,6 +1827,7 @@
     chatEs = new EventSource(API + BRAND.chat + '/' + encodeURIComponent(id) + '/events');
     chatEs.onmessage = (e) => {
       let ev; try { ev = JSON.parse(e.data); } catch (err) { return; }
+      if (ev.ready && ev.model && String(ev.model) !== liveModel) { liveModel = String(ev.model); modelSync(); if (modelLine) modelLine(); }
       if (ev.t === 'status' || ev.t === 'sync') { chatStatus(ev.state, ev); if (ev.t === 'status') loadConvos(); }
       chatAppend(ev);
     };
