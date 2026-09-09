@@ -19,6 +19,8 @@ beforeAll(async () => {
     '.pinpoint.json': JSON.stringify({ port, name: 'acme', session: 'pinpoint_acme', dispatch: 'session', apps: [{ dir: '.', origin: APP_ORIGIN }] }),
     // a worker record from a previous server run: loadWorkers() revives it as an exited conversation
     '.docs/pinpoint/workers/old-batch.json': JSON.stringify({ batchId: 'old-batch', workerId: 'w1', sessionUuid: '00000000-0000-0000-0000-000000000000', page: `${APP_ORIGIN}/home`, title: 'Home', state: 'idle', started: true, startedAt: '2026-01-01T00:00:00.000Z', lastAt: '2026-01-01T00:00:00.000Z', turns: 1, costUsd: 0 }),
+    // a second revived conversation, so the model tests do not depend on the close test's ordering
+    '.docs/pinpoint/workers/model-batch.json': JSON.stringify({ batchId: 'model-batch', workerId: 'w2', sessionUuid: '00000000-0000-0000-0000-000000000002', page: `${APP_ORIGIN}/home`, title: 'Home', state: 'exited', started: true, startedAt: '2026-01-01T00:00:00.000Z', lastAt: '2026-01-01T00:00:00.000Z', turns: 1, costUsd: 0 }),
   });
   base = `http://127.0.0.1:${port}`;
   upstream = tmpProject({ 'README.md': 'pinpoint' });
@@ -89,6 +91,34 @@ describe('HTTP owner', () => {
     expect(existsSync(join(workersDir, 'old-batch.json.closed'))).toBe(true);
     expect((await post('/api/chat/old-batch/close', {}, APP_ORIGIN)).status).toBe(404);
   });
+  test('offers the worker models on health and in the prelude', async () => {
+    const h = await (await fetch(base + '/api/health')).json();
+    expect(h.model).toBe('');
+    expect(h.models.map((m: any) => m.id)).toEqual(['', 'fable', 'opus', 'opus[1m]', 'sonnet', 'haiku']);
+    const js = await (await fetch(base + '/pinpoint.js')).text();
+    const brand = JSON.parse(js.slice('window.__reviewBrand = '.length, js.indexOf('\n')).replace(/;$/, ''));
+    expect(brand.models[0]).toMatchObject({ id: '', label: 'Default' });
+  });
+  test('sets a conversation model, persists it on the record, and refuses one it does not offer', async () => {
+    const r = await post('/api/chat/model-batch/model', { model: 'sonnet' }, APP_ORIGIN);
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ ok: true, model: 'sonnet' });
+    const chats = await (await fetch(base + '/api/chat')).json();
+    expect(chats.find((c: any) => c.id === 'model-batch').model).toBe('sonnet');
+    const rec = JSON.parse(readFileSync(join(project.root, '.docs', 'pinpoint', 'workers', 'model-batch.json'), 'utf8'));
+    expect(rec.model).toBe('sonnet'); // a restart brings the choice back
+    const lines = readFileSync(join(project.root, '.docs', 'pinpoint', 'workers', 'model-batch.chat.jsonl'), 'utf8').trim().split('\n');
+    expect(JSON.parse(lines[lines.length - 1])).toMatchObject({ t: 'status', modelSet: true, model: 'sonnet' });
+    const bad = await post('/api/chat/model-batch/model', { model: 'gpt-9' }, APP_ORIGIN);
+    expect(bad.status).toBe(400);
+    expect((await bad.json()).hint).toContain('worker.models');
+    expect(JSON.parse(readFileSync(join(project.root, '.docs', 'pinpoint', 'workers', 'model-batch.json'), 'utf8')).model).toBe('sonnet');
+  });
+  test('refuses a batch asking for a model the server does not offer', async () => {
+    const r = await post('/api/pins', { ...batch(), model: 'gpt-9' }, APP_ORIGIN);
+    expect(r.status).toBe(400);
+    expect((await r.json()).error).toContain('gpt-9');
+  });
   test('rejects a foreign browser origin', async () => {
     const r = await post('/api/pins', batch(), 'https://evil.example');
     expect(r.status).toBe(403);
@@ -126,6 +156,95 @@ describe('HTTP owner', () => {
     expect(st.complete).toBe(true);
     expect(st.progress['1']).toMatchObject({ status: 'done', note: 'moved into the footer', by: 'sess1' });
   });
+});
+
+// The picked model has to reach the claude process itself, so this stands up a worker-dispatch
+// project whose claudeBin is a script that records its argv and exits.
+describe('worker dispatch spawns claude with the picked model', () => {
+  const ORIGIN = 'http://models.localhost:5173';
+  let wPort: number;
+  let wProject: ReturnType<typeof tmpProject>;
+  let wOwner: ReturnType<typeof Bun.spawn>;
+  let wBase: string;
+  const argv = (n: string) => readFileSync(join(wProject.root, n), 'utf8').trim().split('\n');
+
+  beforeAll(async () => {
+    wPort = await freePort();
+    wProject = tmpProject({
+      'fake-claude.sh': [
+        '#!/bin/sh',
+        'printf \'%s\\n\' "$@" > "$(dirname "$0")/argv-$$.txt"',
+        'echo \'{"type":"system","subtype":"init","model":"stub"}\'',
+        'while IFS= read -r line; do',
+        '  echo \'{"type":"result","subtype":"success","is_error":false,"duration_ms":1,"num_turns":1,"total_cost_usd":0}\'',
+        'done',
+      ].join('\n') + '\n',
+    });
+    writeFileSync(join(wProject.root, '.pinpoint.json'), JSON.stringify({ port: wPort, name: 'models', dispatch: 'worker', claudeBin: join(wProject.root, 'fake-claude.sh'), apps: [{ dir: '.', origin: ORIGIN }] }));
+    Bun.spawnSync(['chmod', '+x', join(wProject.root, 'fake-claude.sh')]);
+    wBase = `http://127.0.0.1:${wPort}`;
+    wOwner = Bun.spawn(['bun', BIN, 'serve'], { cwd: wProject.root, env: cleanEnv({ PINPOINT_ROOT: wProject.root, PINPOINT_ROLE: 'http', PINPOINT_DETACHED: '1', PINPOINT_NO_UPDATE_CHECK: '1' }), stdout: 'ignore', stderr: 'pipe' });
+    await waitFor(async () => (await fetch(wBase + '/api/health')).ok, 15000);
+  }, 20000);
+  afterAll(() => { try { wOwner.kill(); } catch {} wProject.rm(); });
+
+  const sendBatch = async (model?: string) => {
+    const r = await fetch(wBase + '/api/pins', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: ORIGIN }, body: JSON.stringify({ page: `${ORIGIN}/home`, title: 'Home', general: 'look at this', pins: [], to: 'worker', ...(model === undefined ? {} : { model }) }) });
+    expect(r.status).toBe(200);
+    return (await r.json()).id as string;
+  };
+  const args = async () => {
+    let file = '';
+    await waitFor(async () => { file = readdirSync(wProject.root).find((n) => n.startsWith('argv-')) || ''; return Boolean(file); }, 10000);
+    const a = argv(file);
+    Bun.spawnSync(['rm', join(wProject.root, file)]);
+    return a;
+  };
+
+  /** The argv belongs to THIS batch's process: its session id is in there. */
+  const spawnedFor = async (id: string) => {
+    const a = await args();
+    const chat = (await (await fetch(wBase + '/api/chat')).json()).find((c: any) => c.id === id);
+    expect(a).toContain(chat.session);
+    return { a, chat };
+  };
+
+  test('passes --model through to claude and records it on the conversation', async () => {
+    const id = await sendBatch('sonnet');
+    const { a, chat } = await spawnedFor(id);
+    expect(a).toContain('--model');
+    expect(a[a.indexOf('--model') + 1]).toBe('sonnet');
+    expect(a).toContain('--dangerously-skip-permissions');
+    expect(chat.model).toBe('sonnet');
+  }, 20000);
+
+  const wPost = (path: string, body: unknown) => fetch(wBase + path, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: ORIGIN }, body: JSON.stringify(body) }); // this block's own server, not the session-dispatch fixture
+  const chatRow = async (id: string) => (await (await fetch(wBase + '/api/chat')).json()).find((c: any) => c.id === id);
+
+  test('a switch restarts the worker on the new model and resumes the same Claude session', async () => {
+    const id = await sendBatch('sonnet');
+    const first = await spawnedFor(id);
+    expect(first.a[first.a.indexOf('--model') + 1]).toBe('sonnet');
+    expect(first.a).toContain('--session-id'); // a fresh conversation
+    await waitFor(async () => (await chatRow(id)).state === 'idle', 10000); // the stub answered the batch
+    // the live process keeps the model it was spawned with, so the switch ends it while it is quiet
+    expect((await wPost(`/api/chat/${id}/model`, { model: 'haiku' })).status).toBe(200);
+    await waitFor(async () => ['exited', 'error'].includes((await chatRow(id)).state), 10000);
+    // and the next message brings the SAME session back on the new model
+    expect((await wPost(`/api/chat/${id}`, { text: 'again' })).status).toBe(200);
+    const second = await spawnedFor(id);
+    expect(second.a[second.a.indexOf('--model') + 1]).toBe('haiku');
+    expect(second.a).toContain('--resume');
+    expect(second.a).toContain(first.chat.session); // new process, same conversation
+    expect((await chatRow(id)).model).toBe('haiku');
+  }, 30000);
+
+  test('leaves --model off when the batch picks the default', async () => {
+    const id = await sendBatch('');
+    const { a, chat } = await spawnedFor(id);
+    expect(a).not.toContain('--model');
+    expect(chat.model).toBe('');
+  }, 20000);
 });
 
 describe('MCP follower', () => {
