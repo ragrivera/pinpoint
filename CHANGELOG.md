@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- 💄 The recap is drawn as a dashed frame with its label notched into the top edge, the way a
+  legend sits in a fieldset. The three edges are painted with repeating gradients rather than a
+  dashed border, because `border-style:dashed` leaves the dash length to the browser and at 1px
+  picks one too fine to read; dash and gap live in `--rc-d` / `--rc-g` / `--rc-c`. Body drops to
+  11.5px mono and loses the italic (overlay)
+- 💄 A message that is nothing but a recap no longer draws the ⏺ bullet or reserves its gutter —
+  the frame already marks it. Scoped to assistant messages, so a reviewer who types a literal
+  `recap:` line keeps their `>` and bubble padding (overlay)
+- 💄 The idle-recap nudge, "worker stopping" and "worker exited" no longer take a transcript row.
+  Each of those events carries `state`, so the drawer header still names them — a transient state
+  belongs there, not in the history (overlay)
+- 💄 "turn done · 9s · $0.12" no longer trails a recap: the recap says the work is closed. A
+  failed turn still gets its row (overlay)
+
+### Documentation
+- 📝 Skill step 7 now tells the worker that `AskUserQuestion` does not exist for it and that the
+  `question` fence is the picker, with the fence syntax, `question multi` and the stepper, before
+  the `Recommended` marker it used to open with (skill)
+
 ## [0.5.0] - 2026-09-09
 
 ### Features
