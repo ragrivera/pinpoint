@@ -19,6 +19,16 @@
   // (same route, last activity inside the worker's idle window, or whatever the drawer has selected on this
   // route) and starts a new one otherwise. The To line says which before sending; "start new" / "continue"
   // flips it for the next Send only.
+  // Which Claude the worker runs. The server sends the list it accepts (BRAND.models) and its
+  // default; the pick is this browser's, kept per project, and is what the next Send uses — for a
+  // new conversation and for one being continued alike. Selecting a conversation in the drawer
+  // adopts ITS model here, so the pill always names the model you are actually working with.
+  const MODELS = Array.isArray(BRAND.models) && BRAND.models.length ? BRAND.models : [];
+  const MODEL_KEY = BRAND.key + ':model';
+  const modelPref = () => { let v = null; try { v = localStorage.getItem(MODEL_KEY); } catch (e) {} return v !== null && MODELS.some((m) => m.id === v) ? v : (BRAND.model || ''); };
+  const setModelPref = (v) => { try { localStorage.setItem(MODEL_KEY, v); } catch (e) {} };
+  const modelLabel = (v) => { const m = MODELS.find((x) => x.id === (v || '')); return m ? m.label : (v || 'Default'); };
+  let modelLine = null; // the panel's "Model:" line, re-synced when the drawer's pill moves
   const CONTINUE_MS = 30 * 60 * 1000;
   let convoTarget = null, convoForceNew = false, convoLine = null;
   const samePath = (page) => { try { return new URL(page).pathname === location.pathname; } catch (e) { return false; } };
@@ -571,6 +581,28 @@
       if (AUTO_WORKER) refreshConvoTarget();
       if (cur) fetch(API + BRAND.sessions).then((r) => r.json()).then((l) => fill(l, true)).catch(() => {});
     }
+    if (BRAND.chat && MODELS.length > 1) {
+      // Same collapsed shape as the To: line: one quiet "Model: Opus · change" until asked.
+      const line = el('div', 'hint'); line.style.cssText = 'display:flex;gap:6px;align-items:center;margin:-4px 0 8px';
+      const who = el('span');
+      const chg = el('button'); chg.type = 'button'; chg.textContent = 'change'; chg.style.cssText = 'background:none;border:0;padding:0;color:inherit;text-decoration:underline;cursor:pointer;font:inherit';
+      const menu = el('div', 'dr-to'); menu.style.display = 'none'; menu.setAttribute('role', 'listbox');
+      modelLine = () => {
+        const cur = modelPref();
+        who.textContent = 'Model: ' + modelLabel(cur);
+        menu.innerHTML = '';
+        MODELS.forEach((m) => {
+          const on = m.id === cur;
+          const op = el('button', 'op' + (on ? ' on' : '')); op.type = 'button'; op.setAttribute('role', 'option'); op.setAttribute('aria-selected', String(on));
+          op.innerHTML = '<span class="ck">' + (on ? '&#10003;' : '') + '</span><span class="lb">' + esc(m.label) + (m.note ? ' <span class="d">' + esc(m.note) + '</span>' : '') + '</span>';
+          op.onclick = () => { menu.style.display = 'none'; pickModel(m.id); };
+          menu.append(op);
+        });
+      };
+      modelLine();
+      chg.onclick = () => { menu.style.display = menu.style.display === 'none' ? '' : 'none'; };
+      line.append(who, chg); body.append(line, menu);
+    }
     const sendBtn = el('button', 'send', 'Send to Claude →'); sendBtn.disabled = !canSend(); sendBtn.onclick = send; body.append(sendBtn);
     // Shortcuts fold: closed by default (it is reference, not workflow), remembered per page.
     const hint = el('div', 'hint' + (state.hintOpen ? '' : ' off'));
@@ -687,11 +719,11 @@
   async function send() {
     const chosen = BRAND.sessions ? (localStorage.getItem(BRAND.key + ':to') || '') : '';
     const cont = AUTO_WORKER && !chosen && convoTarget && !convoForceNew ? convoTarget : null;
-    const body = { page: location.href, title: document.title, viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio }, state: appState(), general: state.general, pins: state.pins, to: BRAND.sessions ? (chosen || (AUTO_WORKER ? 'worker' : '')) : undefined };
+    const body = { page: location.href, title: document.title, viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio }, state: appState(), general: state.general, pins: state.pins, to: BRAND.sessions ? (chosen || (AUTO_WORKER ? 'worker' : '')) : undefined, model: modelPref() };
     try {
       if (cont) {
         // Continue the page's conversation: the drawer's own path (pins are appended to its batch, numbered on).
-        const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(cont.id), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: state.general, pins: state.pins }) });
+        const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(cont.id), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: state.general, pins: state.pins, model: modelPref() }) });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error([j.error, j.hint].filter(Boolean).join(' \u2014 ') || String(r.status));
         if (state.pins.length) { if (Number(j.total) > 0) { if (snHidden) snSetHidden(false); snRetrack(cont.id, Number(j.total)); } else snNotice('Sent, but this pinpoint server ignored the pins \u2014 restart it.', 'err', 8000); }
@@ -1119,7 +1151,7 @@
   });
   document.addEventListener('pointerdown', (e) => {
     if (flyOpen && e.target instanceof Element && !e.target.closest('.dr-dock,.dr-dock-fly')) { flyOpen = false; renderHub(); }
-    if (chatMenuClose && e.target instanceof Element && !e.target.closest('.dr-chat-sel')) chatMenuClose();
+    if (chatMenuClose && e.target instanceof Element && !e.target.closest('.dr-chat-sel,.dr-chat-mw')) chatMenuClose();
   }, true);
   window.addEventListener('resize', () => { placeDock(); placePanel(); snPlace(); });
   dockReady = true; renderHub();
@@ -1186,10 +1218,23 @@
   .dr-chat-sel .it .cl{font-size:14px}.dr-chat-sel .it .cl.arm,.dr-chat-sel .it .cl.arm:hover{width:auto;padding:0 6px;color:#ff8a8e;font:600 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase}
   .dr-chat-sel .rn-in{width:100%;box-sizing:border-box;margin:0;padding:1px 6px;border-radius:5px;border:1px solid rgba(var(--dr-w),.22);background:rgba(0,0,0,.28);color:var(--dr-fg);font:inherit;outline:0}
   @media (prefers-reduced-motion:reduce){.dr-chat-sel .chev{transition:none}}
-  .dr-chat-stop{flex:none;width:30px;height:30px;display:grid;place-items:center;border:1px solid rgba(255,90,95,.35);background:rgba(255,90,95,.1);border-radius:999px;padding:0;cursor:pointer}
+  .dr-chat-stop{flex:none;width:28px;height:28px;display:grid;place-items:center;border:1px solid rgba(255,90,95,.35);background:rgba(255,90,95,.1);border-radius:999px;padding:0;cursor:pointer}
   .dr-chat-stop::before{content:'';width:9px;height:9px;border-radius:2px;background:#ff8a8e}
   .dr-chat-stop:hover{background:rgba(255,90,95,.22)}
-  .dr-chat-term{flex:none;height:30px;padding:0 9px;display:grid;place-items:center;border:1px solid rgba(var(--dr-w),.14);background:rgba(var(--dr-w),.06);border-radius:999px;cursor:pointer;color:var(--dr-fg3);font:700 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.04em}
+  .dr-chat-mw{flex:none;position:relative}
+  .dr-chat-lt,.dr-chat-rt{display:flex;align-items:center;gap:6px;min-width:0}
+  .dr-chat-rt .dr-chat-send{margin-left:5px}
+  .dr-chat-mw .tg{height:28px;padding:0 8px;display:flex;align-items:center;gap:6px;border:1px solid rgba(var(--dr-w),.14);background:rgba(var(--dr-w),.06);border-radius:999px;cursor:pointer;color:var(--dr-fg3);font:700 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}
+  .dr-chat-mw .tg:hover,.dr-chat-mw.open .tg{background:rgba(var(--dr-w),.12);color:var(--dr-fg)}
+  .dr-chat-mw .chev{flex:none;display:inline-block;width:5px;height:5px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(1px) rotate(225deg);color:var(--dr-fg3);transition:transform .22s cubic-bezier(.22,.61,.36,1)}
+  .dr-chat-mw.open .chev{transform:translateY(-2px) rotate(45deg)}
+  .dr-chat-mw .menu{position:absolute;left:0;top:auto;bottom:calc(100% + 6px);z-index:3;min-width:210px;background:rgba(var(--dr-g),.97);border:1px solid rgba(var(--dr-w),.12);border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,.4);padding:4px}
+  .dr-chat-mw .it{display:grid;grid-template-columns:12px 1fr;gap:8px;align-items:baseline;padding:6px 8px;border-radius:6px;cursor:pointer;color:var(--dr-fg);font:12px/1.4 ui-monospace,Menlo,monospace}
+  .dr-chat-mw .it:hover{background:rgba(var(--dr-w),.08)}
+  .dr-chat-mw .it .ck{color:#39d98a;font-size:11px;text-align:center}
+  .dr-chat-mw .it .d{grid-column:2;color:var(--dr-fg3b);font-size:10px}
+  @media (prefers-reduced-motion:reduce){.dr-chat-mw .chev{transition:none}}
+  .dr-chat-term{flex:none;width:28px;height:28px;padding:0;display:grid;place-items:center;border:1px solid rgba(var(--dr-w),.14);background:rgba(var(--dr-w),.06);border-radius:999px;cursor:pointer;color:var(--dr-fg3);font:700 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.04em}
   .dr-chat-term:hover{background:rgba(var(--dr-w),.12);color:var(--dr-fg)}.dr-chat-term:disabled{opacity:.5;cursor:default}
   .dr-chat-ls{flex:1 1 auto;min-height:0;overflow-y:auto;padding:12px 14px 10px;display:flex;flex-direction:column;gap:2px;background:rgba(0,0,0,.16);font:12px/1.55 ui-monospace,Menlo,SFMono-Regular,monospace;scrollbar-width:thin;scrollbar-color:rgba(var(--dr-w),.18) transparent}
   .dr-chat-ls::-webkit-scrollbar{width:8px}.dr-chat-ls::-webkit-scrollbar-thumb{background:rgba(var(--dr-w),.18);border-radius:4px}
@@ -1223,7 +1268,7 @@
   .dr-chat .m .qact .qsub{background:#39d98a;border-color:#39d98a;color:#0c1116}.dr-chat .m .qact .qsub:hover{background:#4fe39a;border-color:#4fe39a}
   .dr-chat .m .qa.answered .qact,.dr-chat .m .qa.answered .qnav{display:none}
   .dr-chat .m .qa.answered .qf{opacity:.45;pointer-events:none}.dr-chat .m .qa.answered .qf.on{opacity:1}.dr-chat .m .qa.answered .qf.on .qi{border-color:#39d98a;background:rgba(57,217,138,.14)}
-  .dr-chat .m .cb{position:relative}.dr-chat .m .cb pre{padding-right:58px}
+  .dr-chat .m .cb{position:relative;display:block;width:auto;height:auto;border:0;border-radius:0;background:none;place-items:normal;cursor:auto;flex:0 1 auto}.dr-chat .m .cb pre{padding-right:58px}
   .dr-chat .m .cp{position:absolute;top:6px;right:6px;cursor:pointer;border:1px solid rgba(var(--dr-w),.14);background:rgba(var(--dr-g),.92);color:var(--dr-fg3);font:600 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;border-radius:6px;padding:4px 6px;opacity:.55;transition:opacity .12s,color .12s}
   .dr-chat .m .cb:hover .cp,.dr-chat .m .cp:focus-visible{opacity:1}.dr-chat .m .cp.on{opacity:1;color:var(--dr-fg)}
   .dr-chat .m table{border-collapse:collapse;margin:6px 0;font-size:11px;max-width:100%}
@@ -1259,7 +1304,7 @@
   .dr-chat-grip:hover::before,.dr-chat-grip.on::before{background:rgba(var(--dr-w),.4)}
   .dr-chat-box{display:flex;flex-direction:column;background:rgba(var(--dr-w),.05);border:1px solid rgba(var(--dr-w),.12);border-radius:12px}
   .dr-chat-box:focus-within{border-color:rgba(var(--dr-w),.3)}
-  .dr-chat-tools{display:flex;align-items:center;justify-content:space-between;padding:2px 6px 6px}
+  .dr-chat-tools{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:3px 6px 7px}
   .dr-chat-ta{display:block;width:100%;box-sizing:border-box;resize:none;min-height:44px;max-height:50vh;height:72px;overflow-y:auto;background:transparent;border:0;border-radius:12px 12px 0 0;color:var(--dr-fg);padding:9px 11px 4px;font:13px/1.4 system-ui,sans-serif;cursor:text;scrollbar-width:thin;scrollbar-color:rgba(var(--dr-w),.18) transparent}
   .dr-chat-ta::-webkit-scrollbar{width:8px}.dr-chat-ta::-webkit-scrollbar-track{background:transparent}.dr-chat-ta::-webkit-scrollbar-thumb{background:rgba(var(--dr-w),.18);border-radius:4px}
   .dr-chat-hint{padding:2px 14px 18px;font-size:11px;color:var(--dr-fg3b);line-height:1.6}
@@ -1303,7 +1348,7 @@
   .dr-lb .cap{display:flex;gap:14px;align-items:center;font:11px ui-monospace,Menlo,monospace;color:rgba(255,255,255,.7);cursor:default}
   .dr-lb .cap a{color:#fff;text-decoration:none;padding:3px 9px;border-radius:999px;background:rgba(255,255,255,.12)}.dr-lb .cap a:hover{background:rgba(255,255,255,.22)}
   @media (prefers-reduced-motion:reduce){.dr-lb,.dr-lb img{transition:none}}`;
-  let chatLs = null, chatTa = null, chatSel = null, chatSt = null, chatSendBtn = null, chatStopBtn = null, chatTermBtn = null, chatEs = null, chatConvos = [], chatPoll = null, chatAtBottom = true;
+  let chatLs = null, chatTa = null, chatSel = null, chatSt = null, chatSendBtn = null, chatStopBtn = null, chatTermBtn = null, chatModel = null, chatEs = null, chatConvos = [], chatPoll = null, chatAtBottom = true;
   let chatAtt = null, chatFiles = []; // pending screenshots: { name, type, data (base64), preview (data URL), w, h }
   const IMG_MAX_EDGE = 1600, IMG_MAX = 6;
   const imgsHtml = (imgs) => Array.isArray(imgs) && imgs.length ? `<div class="imgs">${imgs.map((i) => `<img src="${esc(API + i.url)}" alt="${esc(i.name || '')}" title="${esc(i.name || '')}">`).join('')}</div>` : '';
@@ -1445,7 +1490,7 @@
     chatStopBtn.onclick = () => { if (chatUi.cur) fetch(API + BRAND.chat + '/' + encodeURIComponent(chatUi.cur) + '/stop', { method: 'POST' }).catch(() => {}); };
     chatTermBtn = el('button', 'dr-chat-term', '&gt;_'); chatTermBtn.type = 'button'; chatTermBtn.setAttribute('aria-label', 'Continue in a terminal'); chatTermBtn.title = 'Continue in a terminal — copies the claude --resume command for this conversation and ends the worker';
     chatTermBtn.onclick = () => handoffConvo();
-    bar.append(chatSel, chatTermBtn, chatStopBtn); loadRoot();
+    bar.append(chatSel); loadRoot(); // every action lives in the composer row below
     chatLs = el('div', 'dr-chat-ls'); chatLs.addEventListener('scroll', () => { chatAtBottom = chatLs.scrollHeight - chatLs.scrollTop - chatLs.clientHeight < 40; });
     if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => { if (chatAtBottom) chatLs.scrollTop = chatLs.scrollHeight; }).observe(chatLs); // stay pinned when the hint / textarea change the pane's height
     chatSt = el('div', 'dr-chat-st', '');
@@ -1463,7 +1508,23 @@
     const ICO = { clip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>', up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>' };
     const clip = el('button', 'dr-chat-clip', ICO.clip); clip.type = 'button'; clip.setAttribute('aria-label', 'Attach screenshots'); clip.title = 'Attach screenshots (or paste / drop them)'; clip.onclick = () => fi.click();
     chatSendBtn = el('button', 'dr-chat-send', ICO.up); chatSendBtn.type = 'button'; chatSendBtn.setAttribute('aria-label', 'Send'); chatSendBtn.title = 'Send (Enter)'; chatSendBtn.onclick = chatSubmit;
-    const box = el('div', 'dr-chat-box'), tools = el('div', 'dr-chat-tools'); tools.append(clip, chatSendBtn); box.append(chatTa, tools);
+    // Model pill: which Claude runs this conversation — in the composer, beside the attach button,
+    // because it is a property of the message you are about to send. Picking one also becomes this
+    // browser's default for the next new conversation, so the panel's Send agrees with what it says.
+    if (MODELS.length > 1) {
+      chatModel = el('div', 'dr-chat-mw');
+      const mTg = el('button', 'tg'); mTg.type = 'button'; mTg.setAttribute('aria-haspopup', 'listbox'); mTg.setAttribute('aria-expanded', 'false');
+      const mMenu = el('div', 'menu'); mMenu.setAttribute('role', 'listbox'); mMenu.style.display = 'none';
+      const mClose = () => { mMenu.style.display = 'none'; chatModel.classList.remove('open'); mTg.setAttribute('aria-expanded', 'false'); chatMenuClose = null; };
+      mTg.onclick = () => { const mine = chatMenuClose === mClose; if (chatMenuClose) chatMenuClose(); if (mine) return; mMenu.style.display = ''; chatModel.classList.add('open'); mTg.setAttribute('aria-expanded', 'true'); chatMenuClose = mClose; };
+      mMenu.addEventListener('click', (e) => { const it = e.target.closest('.it'); if (!it) return; mClose(); pickModel(it.dataset.model || ''); });
+      chatModel.append(mTg, mMenu); chatModel._tg = mTg; chatModel._menu = mMenu;
+      MODELS.forEach((m) => { const it = el('div', 'it'); it.dataset.model = m.id; it.setAttribute('role', 'option'); it.innerHTML = '<span class="ck"></span><span class="lb">' + esc(m.label) + '</span>' + (m.note ? '<span class="d">' + esc(m.note) + '</span>' : ''); mMenu.append(it); });
+      modelSync();
+    }
+    const box = el('div', 'dr-chat-box'), tools = el('div', 'dr-chat-tools'), toolsL = el('div', 'dr-chat-lt'), toolsR = el('div', 'dr-chat-rt');
+    toolsL.append(clip, ...(chatModel ? [chatModel] : [])); toolsR.append(chatTermBtn, chatStopBtn, chatSendBtn);
+    tools.append(toolsL, toolsR); box.append(chatTa, tools);
     // "/" picker: a slash as the first character lists the skills / commands the worker can run (GET /api/skills).
     let slashItems = null, slashIdx = 0, slashRows = [];
     const slash = el('div', 'dr-chat-slash'); slash.style.display = 'none'; slash.setAttribute('role', 'listbox');
@@ -1586,6 +1647,7 @@
         if (ev.reset) return n('status', 'conversation cleared — the worker starts from a blank context' + (ev.pins ? ' \u00b7 ' + ev.pins + ' pin' + (ev.pins === 1 ? '' : 's') + ' forgotten, the next ones start at #1' : ''));
         if (ev.compacted) return n('status', 'context compacted' + (ev.pre ? ' · ' + (ev.pre / 1000).toFixed(1) + 'k → ' + (ev.post / 1000).toFixed(1) + 'k tokens' : ''));
         if (ev.handoff) return n('status handoff', '<span class="hi" aria-hidden="true">&gt;_</span><b>Handed off to a terminal</b><span class="sub">The resume command is on your clipboard — paste it in a terminal to carry this session on there. A message here starts a new worker on the same session.</span>');
+        if (ev.modelSet) return n('status', 'model \u2192 ' + esc(modelLabel(ev.model)) + ' — the worker restarts on it, resuming this session');
         if (ev.stopping) return n('status', 'worker stopping — ' + esc(ev.stopping));
         if (ev.state === 'starting') return n('status', ev.resume ? 'resuming the worker session…' : 'starting a worker…');
         if (ev.ready) return n('status', 'worker ready' + (ev.model ? ' · ' + esc(ev.model) : ''));
@@ -1662,6 +1724,25 @@
     chatSel._tg.innerHTML = (cur ? convoHtml(cur) : newConvoHtml()) + '<i class="chev"></i>';
     chatSel._menu.querySelectorAll('.it').forEach((it) => { const on = (it.dataset.id || '') === (cur ? cur.id : ''); it.setAttribute('aria-selected', String(on)); it.querySelector('.ck').innerHTML = on ? '&#10003;' : ''; });
   }
+  // The pill mirrors the preference; the open conversation is switched server-side (its worker
+  // restarts on the new model, resuming the same Claude session, so no context is lost).
+  function modelSync() {
+    if (!chatModel) return;
+    const cur = modelPref();
+    chatModel._tg.innerHTML = '<span class="lb">' + esc(modelLabel(cur)) + '</span><i class="chev"></i>';
+    chatModel._tg.title = 'Model the worker runs — ' + modelLabel(cur) + (cur ? ' (claude --model ' + cur + ')' : ' (the claude binary\'s own default)');
+    chatModel._menu.querySelectorAll('.it').forEach((it) => { const on = (it.dataset.model || '') === cur; it.setAttribute('aria-selected', String(on)); it.querySelector('.ck').innerHTML = on ? '&#10003;' : ''; });
+  }
+  async function pickModel(id) {
+    setModelPref(id); modelSync(); if (modelLine) modelLine();
+    if (!chatOpen || !chatUi.cur) return; // from the panel the pick just rides along with Send; only the open drawer switches a conversation in place
+    try {
+      const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(chatUi.cur) + '/model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: id }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(r.status === 404 ? 'this pinpoint server predates the model picker; restart it to enable it' : ([j.error, j.hint].filter(Boolean).join(' \u2014 ') || 'HTTP ' + r.status));
+      loadConvos();
+    } catch (e) { chatAppend({ t: 'error', text: 'Model switch failed \u2014 ' + (e && e.message ? e.message : e), at: new Date().toISOString() }); }
+  }
   // Inline rename of a menu row: Enter or blur saves, Esc cancels, empty clears it. Names are a per-browser label (chatUi) for tracking only.
   function renameConvo(it) {
     const id = it.dataset.id, c = chatConvos.find((x) => x.id === id); if (!c) return;
@@ -1721,6 +1802,9 @@
   function selectConvo(id) {
     if (chatEs) { chatEs.close(); chatEs = null; }
     chatUi.cur = id || null; chatSave(); if (AUTO_WORKER) refreshConvoTarget();
+    const row = id ? chatConvos.find((c) => c.id === id) : null; // the pill names the model in use here
+    if (row && typeof row.model === 'string' && row.model !== modelPref()) { setModelPref(row.model); if (modelLine) modelLine(); }
+    modelSync();
     if (!chatLs) return;
     chatLs.innerHTML = ''; chatAtBottom = true; selSync();
     if (!id) { chatStatus(null); chatAppend({ t: 'error', text: '' }); chatLs.innerHTML = ''; const d = el('div', 'm status'); d.innerHTML = 'A message here starts a new worker for this page (sent as a general note). Pins you place while the drawer is open are listed above the box and go out with it.'; chatLs.append(d); return; }
@@ -1760,7 +1844,7 @@
     const consumePins = () => { if (pins.length) { state.pins = []; save(); closePop(); } };
     try {
       if (chatUi.cur) {
-        const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(chatUi.cur), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, images, pins }) });
+        const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(chatUi.cur), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, images, pins, model: modelPref() }) });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error([j.error, j.hint].filter(Boolean).join(' — ') || String(r.status));
         if (pins.length) {
@@ -1768,7 +1852,7 @@
           else chatAppend({ t: 'error', text: 'Message sent, but this pinpoint server ignored the pins — restart it (they are still listed above).', at: new Date().toISOString() });
         }
       } else {
-        const body = { page: location.href, title: document.title, viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio }, state: appState(), general: text || (pins.length ? '' : 'See the attached screenshot.'), pins, images, to: 'worker' };
+        const body = { page: location.href, title: document.title, viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio }, state: appState(), general: text || (pins.length ? '' : 'See the attached screenshot.'), pins, images, to: 'worker', model: modelPref() };
         const r = await fetch(API + BRAND.api, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error([j.error, j.hint].filter(Boolean).join(' — ') || String(r.status));

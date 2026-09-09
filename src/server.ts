@@ -58,7 +58,8 @@ import { basename, dirname, extname, join, resolve, sep } from 'path';
 import { findProject as findProjectFile } from './config.js';
 import pkg from '../package.json';
 
-type WorkerCfg = { idleMinutes?: number; mcp?: 'pinpoint' | 'all'; args?: string[] };
+type ModelOpt = { id: string; label: string; note?: string };
+type WorkerCfg = { idleMinutes?: number; mcp?: 'pinpoint' | 'all'; args?: string[]; model?: string; models?: Array<string | Partial<ModelOpt>> };
 type Project = { root: string; port?: number; name?: string; file?: string; dispatch?: 'worker' | 'session'; claudeBin?: string; worker?: WorkerCfg; origins: string[]; updateCheck?: boolean };
 function findProject(from: string): Project {
   const { root, file, config: j } = findProjectFile(from);
@@ -89,11 +90,36 @@ const CLAUDE_BIN = PROJECT.claudeBin || process.env.PINPOINT_CLAUDE || Bun.which
 const WORKER_IDLE_MS = Math.max(1, Number(PROJECT.worker?.idleMinutes ?? 30)) * 60_000;
 const WORKER_MCP: 'pinpoint' | 'all' = PROJECT.worker?.mcp === 'all' ? 'all' : 'pinpoint';
 const WORKER_ARGS: string[] = Array.isArray(PROJECT.worker?.args) ? PROJECT.worker!.args!.map(String) : [];
+// Which Claude a worker runs (`--model <id>`; the empty id means the claude binary's own
+// default). Aliases rather than dated ids, so the list does not rot; a project can replace it
+// with worker.models in .pinpoint.json and preselect one with worker.model. The overlay's model
+// pill offers exactly this list and the server refuses anything outside it — a typo would
+// otherwise surface only as a worker that dies on spawn.
+const ANY_MODEL: ModelOpt = { id: '', label: 'Default', note: 'whatever claude is set to' };
+const DEFAULT_MODELS: ModelOpt[] = [
+  ANY_MODEL,
+  { id: 'fable', label: 'Fable', note: 'most capable, priciest' },
+  { id: 'opus', label: 'Opus', note: 'strong all-rounder' },
+  { id: 'opus[1m]', label: 'Opus 1M', note: 'opus, 1M-token context' },
+  { id: 'sonnet', label: 'Sonnet', note: 'faster, cheaper' },
+  { id: 'haiku', label: 'Haiku', note: 'fastest, small fixes' },
+];
+const MODELS: ModelOpt[] = (() => {
+  const raw = PROJECT.worker?.models;
+  if (!Array.isArray(raw) || !raw.length) return DEFAULT_MODELS;
+  const list = raw
+    .map((m): ModelOpt => (typeof m === 'string' ? { id: m, label: m } : { id: String(m?.id ?? ''), label: String(m?.label || m?.id || ANY_MODEL.label), ...(m?.note ? { note: String(m.note) } : {}) }))
+    .filter((m, i, all) => all.findIndex((x) => x.id === m.id) === i);
+  return list.some((m) => m.id === '') ? list : [ANY_MODEL, ...list];
+})();
+const isModel = (id: string) => MODELS.some((m) => m.id === id);
+const modelIds = () => MODELS.map((m) => m.id || '(default)').join(', ');
+const DEFAULT_MODEL = typeof PROJECT.worker?.model === 'string' && isModel(PROJECT.worker.model) ? PROJECT.worker.model : '';
 // Worker state lives beside, not inside, the feedback dir: older pinpoint MCP processes treat
 // every unclaimed *.json in feedback/ as a batch and would claim-rename these files.
 const WORKERS_DIR = join(ROOT, '.docs', 'pinpoint', 'workers');
 const WORKER_MCP_CFG = join(WORKERS_DIR, 'mcp.json');
-const BRAND = { name: 'Pinpoint', key: 'pinpoint', api: '/api/pins', sessions: '/api/sessions', chat: '/api/chat', dispatch: DISPATCH, server: 'pinpoint', port: PORT, requiredSession: STRICT ? REQUIRED_SESSION : null };
+const BRAND = { name: 'Pinpoint', key: 'pinpoint', api: '/api/pins', sessions: '/api/sessions', chat: '/api/chat', dispatch: DISPATCH, server: 'pinpoint', port: PORT, requiredSession: STRICT ? REQUIRED_SESSION : null, models: MODELS, model: DEFAULT_MODEL };
 
 // ─── Update check ─────────────────────────────────────────────────────────────
 // So people notice a newer pinpoint: at most once every 4 hours — on owner start and whenever a worker
@@ -228,7 +254,7 @@ const log = (...a: unknown[]) => console.error('[pinpoint]', ...a); // stderr �
 // ─── Pin store: the directory is the source of truth, shared by every session ──
 type PinStatus = 'working' | 'done' | 'skipped' | 'question';
 type Progress = Record<string, { status: PinStatus; note?: string; at: string; by?: string }>;
-type Batch = { id: string; receivedAt: string; page: string; title: string; general: string; pins: unknown[]; state?: unknown; viewport?: unknown; to?: string; claimedBy?: string; progress?: Progress };
+type Batch = { id: string; receivedAt: string; page: string; title: string; general: string; pins: unknown[]; state?: unknown; viewport?: unknown; to?: string; model?: string; claimedBy?: string; progress?: Progress };
 const CLAIMED = /\.claimed-([^.]+)\.json$/;
 // Batch files: <id>.json / <id>.claimed-<who>.json (nothing else belongs in feedback/).
 const isBatchFile = (n: string) => n.endsWith('.json') && !n.startsWith('_');
@@ -245,6 +271,8 @@ function receive(input: Omit<Batch, 'id' | 'receivedAt'> & { images?: unknown })
   const { images, ...body } = input;
   const ts = new Date();
   const toRaw = (body.to || '').trim();
+  const model = String(body.model ?? DEFAULT_MODEL).trim(); // req.json() is unvalidated: a non-string must 400, not throw
+  if (!isModel(model)) throw new PinError(400, `Unknown model ${model}`, `This server offers: ${modelIds()} — add others to worker.models in .pinpoint.json.`);
   const explicitSession = Boolean(toRaw) && toRaw !== 'any' && toRaw !== 'worker';
   const wantsWorker = toRaw === 'worker' || (!explicitSession && DISPATCH === 'worker');
   if (STRICT && explicitSession && !handlers().some((x) => x.id === toRaw)) throw new PinError(409, `Session ${toRaw} is not a live ${REQUIRED_SESSION} handler`, `Open the To: picker and choose a listed session (or the headless worker).`);
@@ -261,7 +289,7 @@ function receive(input: Omit<Batch, 'id' | 'receivedAt'> & { images?: unknown })
     const { refs, blocks } = saveImages(id, images);
     const b: Batch & { images?: string[] } = { id, receivedAt: ts.toISOString(), ...body, to: workerId, claimedBy: workerId, ...(refs.length ? { images: refs.map((r) => r.file) } : {}) };
     writeFileSync(join(FEEDBACK_DIR, `${id}.claimed-${workerId}.json`), JSON.stringify(b, null, 2));
-    const w = new Worker({ batchId: id, workerId, sessionUuid: crypto.randomUUID(), page: b.page, title: b.title, state: 'starting', started: false, startedAt: ts.toISOString(), lastAt: ts.toISOString(), turns: 0, costUsd: 0 });
+    const w = new Worker({ batchId: id, workerId, sessionUuid: crypto.randomUUID(), page: b.page, title: b.title, state: 'starting', started: false, startedAt: ts.toISOString(), lastAt: ts.toISOString(), turns: 0, costUsd: 0, model });
     workers.set(id, w);
     w.emit({ t: 'batch', pins: b.pins.length, general: b.general || '', page: b.page, title: b.title, images: publicRefs(refs) });
     w.sendRaw(withImages(batchPrompt(b), refs, blocks));
@@ -386,7 +414,7 @@ function listSkills(): SkillRow[] {
 
 // ─── Workers: one headless Claude per batch, chat over its stdin/stdout ────────
 type WState = 'starting' | 'working' | 'idle' | 'exited' | 'error';
-type WorkerRec = { batchId: string; workerId: string; sessionUuid: string; page: string; title: string; state: WState; started: boolean; startedAt: string; lastAt: string; turns: number; costUsd: number; exitCode?: number | null };
+type WorkerRec = { batchId: string; workerId: string; sessionUuid: string; page: string; title: string; state: WState; started: boolean; startedAt: string; lastAt: string; turns: number; costUsd: number; model?: string; exitCode?: number | null };
 type ChatEvent = { t: string; at: string; [k: string]: unknown };
 const workers = new Map<string, Worker>();
 const rel = (p: unknown) => (typeof p === 'string' ? p.replace(ROOT + '/', '') : '');
@@ -509,6 +537,9 @@ class Worker {
   subs = new Set<(e: ChatEvent) => void>();
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private killTimer: ReturnType<typeof setTimeout> | null = null;
+  private stopping = false; // stdin already closed: the exit is on its way, do not ask twice
+  private spawnedModel = ''; // the --model this process actually started with
+  private inflight = 0; // messages written but not yet answered — never end a process holding one
   private queue: UserContent[] = [];
   closed = false; // closed from the picker: the record parks as <id>.json.closed so loadWorkers() skips it; transcript + images stay
   constructor(public rec: WorkerRec) { this.saveRec(); }
@@ -532,6 +563,10 @@ class Worker {
   }
   sendRaw(content: UserContent) {
     this.clearIdle();
+    // A model change lands on the next process: queue the message, end this one, and let the
+    // exit handler resume the same Claude session with the new --model. Only while nothing is in
+    // flight — a turn in progress (or a message already handed over) is never thrown away.
+    if (this.proc && this.spawnedModel !== (this.rec.model || '') && !this.inflight) { this.queue.push(content); this.stop('model change'); return; }
     if (!this.proc) { this.queue.push(content); this.start(this.rec.started); return; }
     if (this.rec.state !== 'working') this.setState('working');
     this.write(content);
@@ -539,7 +574,7 @@ class Worker {
   private write(content: UserContent) {
     if (!this.proc) return;
     const line = JSON.stringify({ type: 'user', message: { role: 'user', content } }) + '\n';
-    try { (this.proc.stdin as any).write(line); (this.proc.stdin as any).flush(); } catch (e) { this.emit({ t: 'error', text: `stdin write failed: ${String((e as any)?.message || e)}` }); }
+    try { (this.proc.stdin as any).write(line); (this.proc.stdin as any).flush(); this.inflight += 1; } catch (e) { this.emit({ t: 'error', text: `stdin write failed: ${String((e as any)?.message || e)}` }); }
   }
   start(resume: boolean) {
     if (this.proc) return;
@@ -548,6 +583,8 @@ class Worker {
     const args = [CLAUDE_BIN, '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '-n', `pin-${this.rec.batchId.slice(-24)}`];
     args.push(resume ? '--resume' : '--session-id', this.rec.sessionUuid);
     if (WORKER_MCP === 'pinpoint') { writeWorkerMcpCfg(); args.push('--strict-mcp-config', '--mcp-config', WORKER_MCP_CFG); }
+    this.spawnedModel = this.rec.model || '';
+    if (this.spawnedModel) args.push('--model', this.spawnedModel);
     args.push(...WORKER_ARGS);
     try {
       this.proc = Bun.spawn(args, {
@@ -556,7 +593,7 @@ class Worker {
         stdin: 'pipe', stdout: 'pipe', stderr: 'pipe',
       });
     } catch (e) { this.proc = null; this.setState('error', { text: `spawn failed: ${String((e as any)?.message || e)}` }); return; }
-    this.rec.started = true; this.announced = false;
+    this.rec.started = true; this.announced = false; this.stopping = false; this.inflight = 0;
     this.setState('starting', { resume, pid: this.proc.pid });
     log(`worker ${this.rec.workerId} ${resume ? 'resumed' : 'started'} pid ${this.proc.pid} for ${this.rec.batchId}`);
     void this.pump(this.proc.stdout as ReadableStream<Uint8Array>, (l) => this.onLine(l));
@@ -608,20 +645,39 @@ class Worker {
         for (const c of Array.isArray(m.message?.content) ? m.message.content : []) if (c.type === 'tool_result' && c.is_error) this.emit({ t: 'tool_error', text: flat(c.content).slice(0, 300) });
         break;
       case 'result':
-        this.rec.turns += 1; this.rec.costUsd += Number(m.total_cost_usd || 0);
+        this.rec.turns += 1; this.rec.costUsd += Number(m.total_cost_usd || 0); this.inflight = Math.max(0, this.inflight - 1);
         this.emit({ t: 'result', ok: !m.is_error, subtype: m.subtype, ms: m.duration_ms, cost: m.total_cost_usd, turns: m.num_turns, text: m.is_error ? String(m.result || m.error || 'error') : '' });
         this.setState('idle');
         this.armIdle();
+        this.applyModel(); // picked mid-turn: end the process now so the next message starts on it
         break;
       default: break; // hooks, rate limits, partials
     }
   }
   private armIdle() { this.clearIdle(); this.idleTimer = setTimeout(() => this.stop('idle timeout'), WORKER_IDLE_MS); }
   private clearIdle() { if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; } }
+  /** Pick the Claude this conversation runs. The live process keeps the model it was spawned with,
+   *  so the switch lands on the next one — which resumes the same session, losing nothing. */
+  setModel(model: string) {
+    const next = (model || '').trim();
+    if (!isModel(next)) throw new PinError(400, `Unknown model ${next}`, `This server offers: ${modelIds()} — add others to worker.models in .pinpoint.json.`);
+    if ((this.rec.model || '') === next) return;
+    this.rec.model = next; this.saveRec();
+    this.emit({ t: 'status', state: this.rec.state, model: next, modelSet: true });
+    log(`worker ${this.rec.workerId} model → ${next || '(default)'}`);
+    this.applyModel();
+  }
+  /** End an idle process whose model is stale, so the restart cost is paid while the reviewer types
+   *  rather than after they hit send. Mid-turn work is never interrupted: `result` calls this again. */
+  private applyModel() {
+    if (!this.proc || this.spawnedModel === (this.rec.model || '') || this.inflight) return;
+    this.stop('model change');
+  }
   /** Close stdin so Claude ends the conversation; a later message resumes it by session id. */
   stop(reason: string) {
     this.clearIdle();
-    if (!this.proc) return;
+    if (!this.proc || this.stopping) return;
+    this.stopping = true;
     this.emit({ t: 'status', state: this.rec.state, stopping: reason });
     const p = this.proc;
     try { (p.stdin as any).end(); } catch {}
@@ -665,7 +721,7 @@ function listChats() {
   return [...workers.values()].sort((a, b) => (a.rec.lastAt < b.rec.lastAt ? 1 : -1)).map((w) => {
     let pins = 0, general = '';
     try { const f = findSaved(w.rec.batchId); if (f) { const b = JSON.parse(readFileSync(f, 'utf8')) as Batch; pins = b.pins.length; general = (b.general || '').slice(0, 120); } } catch {}
-    return { id: w.rec.batchId, page: w.rec.page, title: w.rec.title, state: w.rec.state, session: w.rec.sessionUuid, startedAt: w.rec.startedAt, lastAt: w.rec.lastAt, turns: w.rec.turns, costUsd: Math.round(w.rec.costUsd * 1000) / 1000, pins, general };
+    return { id: w.rec.batchId, page: w.rec.page, title: w.rec.title, state: w.rec.state, session: w.rec.sessionUuid, model: w.rec.model || '', startedAt: w.rec.startedAt, lastAt: w.rec.lastAt, turns: w.rec.turns, costUsd: Math.round(w.rec.costUsd * 1000) / 1000, pins, general };
   });
 }
 function sse(w: Worker, req: Request, headers: Record<string, string>) {
@@ -748,7 +804,7 @@ try {
         flutterBus.emit({ t: 'cleared' });
         return Response.json({ ok: true }, { headers: CORS });
       }
-      if (url.pathname === '/api/health') return Response.json({ ok: true, root: ROOT, port: PORT, project: PROJECT.file ?? null, name: PROJECT_NAME, dispatch: DISPATCH, claudeBin: CLAUDE_BIN, requiredSession: STRICT ? REQUIRED_SESSION : null, feedbackDir: FEEDBACK_DIR, sessions: liveSessions().length, handlers: handlers().length, workers: [...workers.values()].filter((w) => w.proc).length, update }, { headers: CORS });
+      if (url.pathname === '/api/health') return Response.json({ ok: true, root: ROOT, port: PORT, project: PROJECT.file ?? null, name: PROJECT_NAME, dispatch: DISPATCH, claudeBin: CLAUDE_BIN, requiredSession: STRICT ? REQUIRED_SESSION : null, feedbackDir: FEEDBACK_DIR, model: DEFAULT_MODEL, models: MODELS, sessions: liveSessions().length, handlers: handlers().length, workers: [...workers.values()].filter((w) => w.proc).length, update }, { headers: CORS });
       if (url.pathname === '/api/skills' && req.method === 'GET') return Response.json(listSkills(), { headers: CORS });
       if (url.pathname === '/api/pins' && req.method === 'POST') {
         try { const b = receive(await req.json()); return Response.json({ ok: true, id: b.id, worker: Boolean((b as any).worker) }, { headers: CORS }); }
@@ -763,7 +819,7 @@ try {
         return Response.json({ ok: true }, { headers: CORS });
       }
       if (url.pathname === '/api/chat' && req.method === 'GET') return Response.json(listChats(), { headers: CORS });
-      const cm = /^\/api\/chat\/([^/]+)(?:\/(events|stop|close|handoff)|\/img\/([^/]+))?$/.exec(url.pathname);
+      const cm = /^\/api\/chat\/([^/]+)(?:\/(events|stop|close|handoff|model)|\/img\/([^/]+))?$/.exec(url.pathname);
       if (cm) {
         const id = decodeURIComponent(cm[1]);
         const w = workers.get(id);
@@ -778,6 +834,11 @@ try {
         if (cm[2] === 'stop' && req.method === 'POST') { w.stop('stopped from the overlay'); return Response.json({ ok: true }, { headers: CORS }); }
         if (cm[2] === 'close' && req.method === 'POST') { w.close('closed from the overlay'); return Response.json({ ok: true }, { headers: CORS }); }
         if (cm[2] === 'handoff' && req.method === 'POST') return Response.json({ ok: true, ...w.handoff() }, { headers: CORS });
+        if (cm[2] === 'model' && req.method === 'POST') {
+          const j = await req.json().catch(() => ({}));
+          try { w.setModel(String(j?.model ?? '')); return Response.json({ ok: true, model: w.rec.model || '', state: w.rec.state }, { headers: CORS }); }
+          catch (e: any) { const st = e instanceof PinError ? e.status : 500; return Response.json({ ok: false, error: String(e?.message || e), hint: e?.hint ?? null, models: MODELS }, { status: st, headers: CORS }); }
+        }
         if (!cm[2] && req.method === 'POST') {
           const j = await req.json().catch(() => ({}));
           const text = String(j?.text ?? '').trim();
@@ -785,6 +846,7 @@ try {
           const hasPins = Array.isArray(j?.pins) && j.pins.length > 0;
           if (!text && !hasImages && !hasPins) return Response.json({ error: 'text, images or pins required' }, { status: 400, headers: CORS });
           try {
+            if (typeof j?.model === 'string') w.setModel(j.model); // the pill moved while the message was being typed
             const added = appendPins(id, j?.pins); // pins from the drawer join this batch before the worker hears about them
             w.send((text || (added.count ? 'See the new pins.' : 'See the attached screenshot.')).slice(0, 20_000), j?.images, added);
             return Response.json({ ok: true, state: w.rec.state, pins: added.count, total: added.total }, { headers: CORS });

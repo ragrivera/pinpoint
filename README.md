@@ -8,7 +8,7 @@ worker picks it up, resolves each pin to the component that rendered it, edits t
 back to a card in the browser, and answers in a chat drawer beside the page. Vite HMR shows the fix as it lands.
 
 - **Overlay** (`/pinpoint.js`): press `R`, pin, comment, send. Progress cards, a chat drawer per batch,
-  screenshots by paste/drop, `/` to run a skill in the worker.
+  screenshots by paste/drop, `/` to run a skill in the worker, a model pill to pick the Claude that runs it.
 - **Server** (`pinpoint serve`): one Bun process that is both an MCP server (stdio, for Claude Code) and a
   local HTTP server (overlay + pin/chat API). One per repo, on that repo's own port.
 - **Worker**: `claude -p` spawned per batch from the repo root, with only the pinpoint MCP loaded. Its session
@@ -100,6 +100,16 @@ pick batches up from the shared directory. Two repos never share a port or a fee
 handled by one worker or session. Per-pin progress is written back into the same file and polled by the
 overlay's progress card.
 
+**Model.** The pill in the drawer's bar (and the panel's *Model:* line) picks which Claude the worker runs:
+`claude --model <id>`, or the binary's own default. It is one preference per project, kept in the browser — the
+model the next *Send* uses, for a new conversation or one being continued — and selecting a conversation in the
+drawer adopts its model, so the pill always names what you are working with. Switching an open conversation
+posts `/api/chat/:id/model`: the running process keeps the model it started with, so pinpoint ends it (right
+away when the worker is quiet, after the current turn otherwise) and the next message resumes the same Claude
+session on the new model, losing no context. The offered list is aliases (`fable`, `opus`, `opus[1m]`,
+`sonnet`, `haiku`) so it does not rot; `worker.models` replaces it and `worker.model` preselects one. The server refuses
+anything outside the list — a typo would otherwise surface only as a worker that dies on spawn.
+
 **Mockups too.** `GET /.docs/open-design/**` serves the project's open-design artifacts (rooted at
 `<root>/.docs/open-design`) with the overlay injected, so pins on a mockup ride the same worker + chat loop;
 the worker brief then edits the artifact's authoring source, never app code. Nothing else is served statically.
@@ -149,7 +159,13 @@ PINPOINT_DETACHED=1 PINPOINT_ROLE=http nohup bun run pinpoint serve > .docs/pinp
   "dispatch": "worker",         // "worker" (headless claude per batch) | "session" (a live session claims it)
   "apps": [{ "dir": "apps/web", "origin": "http://localhost:5173" }],  // Origin allowlist + docs
   "claudeBin": "/usr/local/bin/claude",           // optional; default `which claude`, else ~/.local/bin/claude
-  "worker": { "idleMinutes": 30, "mcp": "pinpoint", "args": [] },  // optional; mcp: "all" loads every user MCP
+  "worker": {                   // optional
+    "idleMinutes": 30,
+    "mcp": "pinpoint",          // "all" loads every user MCP
+    "args": [],                 // extra claude flags
+    "model": "",                // preselects the model pill ("" = whatever claude is set to)
+    "models": []                // replaces the offered list: ["opus", { "id": "fable", "label": "Fable", "note": "most capable" }]
+  },
   "updateCheck": true           // optional; false stops the 4-hourly look at the package repo's tags for a newer pinpoint
 }
 ```
