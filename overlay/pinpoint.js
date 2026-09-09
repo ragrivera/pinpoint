@@ -1281,6 +1281,8 @@
   .dr-chat .m .qb.rec{border-color:rgba(var(--dr-w),.26)}
   .dr-chat .m .qb .qrec{float:right;margin:1px 0 2px 10px;font:600 9.5px/1.35 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--dr-fg3b)}
   .dr-chat .m .qb.on .qrec{color:#39d98a}
+  .dr-chat .m .rc{margin:8px 0 2px;border-left:2px solid rgba(var(--dr-w),.18);padding:1px 0 1px 9px;color:var(--dr-fg2);font-style:italic}
+  .dr-chat .m .rc .rl{display:block;font:600 9.5px/1.7 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--dr-fg3b);font-style:normal}
   .dr-chat .m .qf{display:flex;gap:6px;margin-top:6px}
   .dr-chat .m .qi{flex:1;min-width:0;box-sizing:border-box;background:rgba(var(--dr-w),.05);border:1px solid rgba(var(--dr-w),.14);border-radius:8px;color:var(--dr-fg);font:12px/1.4 ui-monospace,Menlo,SFMono-Regular,monospace;padding:7px 10px;outline:none;cursor:text}
   .dr-chat .m .qi::placeholder{color:var(--dr-fg3b)}.dr-chat .m .qi:focus{border-color:rgba(var(--dr-w),.3)}
@@ -1431,9 +1433,13 @@
   // A worker may open with the project's mandated *[YYYY-MM-DD HH:MM:SS]* line; the drawer stamps every message itself, so drop it.
   const noStamp = (t) => String(t == null ? '' : t).replace(/^\s*[*_]{0,2}\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\][*_]{0,2}[ \t]*\r?\n?/, '');
   // markdown-lite: fenced code, inline code, bold, line breaks — enough for a worker's numbered reply
-  // markdown-lite: fenced code, inline code, bold, pipe tables, line breaks — enough for a worker's numbered reply
+  // markdown-lite: fenced code, inline code, bold, pipe tables, recap blocks, line breaks — enough for a worker's numbered reply
   const inline = (t) => esc(t).replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
   const isRow = (l) => /^\s*\|.*\|\s*$/.test(l || ''), cells = (l) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => inline(c.trim()));
+  // A line that opens with "recap:" (however it is decorated) closes a stretch of work: it gets the
+  // progress notes' quiet block — dim caps label, 2px rule — instead of running on inside the reply.
+  const RECAP_RE = /^\s*(?:\u2733\s*)?(?:\*\*\s*recap\s*\*\*\s*:|\*\*\s*recap\s*:\s*\*\*|recap\s*:)\s*(.+)$/i;
+  const BLOCK_RE = /^<(?:table|div class="rc")/;
   // ```question blocks from a worker (first line(s) the question, each "- " line a choice). All the blocks of one
   // message form ONE stepper: a question at a time with Back / Next, a free-text field on every step, and a single
   // Submit at the end that sends every answer in one message (chatAnswer). A lone block is just its Submit.
@@ -1480,9 +1486,11 @@
         for (j += 2; j < ls.length && isRow(ls[j]); j++) h += '<tr>' + cells(ls[j]).map((c) => '<td>' + c + '</td>').join('') + '</tr>';
         out.push(h + '</table>'); j--; continue;
       }
+      const rc = RECAP_RE.exec(ls[j]);
+      if (rc) { out.push('<div class="rc"><span class="rl">recap</span>' + inline(rc[1]) + '</div>'); continue; }
       out.push(inline(ls[j]));
     }
-    return out.reduce((acc, x, k) => acc + (k && !x.startsWith('<table') && !out[k - 1].startsWith('<table') ? '<br>' : '') + x, '');
+    return out.reduce((acc, x, k) => acc + (k && !BLOCK_RE.test(x) && !BLOCK_RE.test(out[k - 1]) ? '<br>' : '') + x, '');
   }).join('');
   function chatBtn() { const b = el('button', 'dr-fp-min dr-chat-btn', '💬'); b.title = 'Chat with the worker (C)'; b.setAttribute('aria-label', 'Chat'); b.onclick = (e) => { e.stopPropagation(); toggleChat(); }; b.addEventListener('pointerdown', (e) => e.stopPropagation()); return b; }
   function buildChat() {
