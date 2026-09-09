@@ -44,6 +44,8 @@ Posted by the overlay, persisted verbatim plus `id`, `receivedAt`, `to`, and lat
       "scrollY": 0,
       "element": { "tag": "button", "path": "main > form > div.flex > button.btn-primary", "text": "Save" },
       "near": "…",                                       // drag-box pins: nearest text instead of element
+      "source": { "file": "app/lib/a.dart", "line": 12, "column": 7 },  // flutter pins: pre-resolved creation location (repo-relative)
+      "widget": "ListTile",                              // flutter pins: the tapped widget's runtime type
       "at": "2026-09-06T10:14:58.001Z"
     }
   ],
@@ -80,9 +82,33 @@ All `/api/*` routes check `Origin`: allowed are the origins in `.pinpoint.json` 
 | `POST /api/chat/:id/handoff` | continue in a terminal: end the worker (if running) and note it in the transcript as a `status` with `handoff: true` + the command; returns `{ ok, command, cwd, session }` (the overlay builds the same `cd <root> && claude --resume <session>` from `/api/health` + the row's `session` and puts it on the clipboard rather than showing it) |
 | `POST /api/chat/:id/close` | end the worker (if running) and drop the conversation from `/api/chat`; its record parks as `<id>.json.closed`, transcript + images stay |
 | `GET /api/chat/:id/img/:file` | a screenshot from the transcript |
+| `GET /flutter` | the Flutter capture panel (served with the overlay `<script>` injected) |
+| `GET /api/flutter/events` | SSE: replay `{t:'client'}` + unsent taps, then live bus events |
+| `POST /api/flutter/taps` | a tap from `pinpoint flutter`: `{ widget?, source: {file, line, column}, rect?, screenshot?: {type, data} }` → `{ ok, n }`; screenshots ≤ ~2 MB decoded |
+| `POST /api/flutter/status` | CLI → bus: `{ t: 'client', connected, app }` or `{ t: 'reloaded', id, ok, error? }` |
+| `POST /api/flutter/select` | panel → bus: `{ on }` (the CLI flips the device's select mode) |
+| `POST /api/flutter/clear` | drop all unsent taps; numbering restarts at 1 |
 
 Chat events (`t`): `batch`, `user`, `assistant`, `tool`, `tool_error`, `result`, `status`, `stderr`, `error`,
 `sync`. Status states: `starting`, `working`, `idle`, `exited`, `error`; a `status` with `closed: true` is a closed conversation's last event, and one with `modelSet: true` + `model` records a model switch.
+
+## Flutter capture (`pinpoint flutter`)
+
+A separate CLI process owns the Dart VM Service connection to one running `flutter run` (debug
+builds only — creation tracking is the preflight). It enables the widget inspector's on-device
+select mode; each tap resolves to the widget's creation location (ToolEvent `navigate` primary,
+Debug-stream `Inspect` fallback), gets a widget screenshot (`ext.flutter.inspector.screenshot`),
+and is POSTed to `/api/flutter/taps` (native client, no Origin header → passes the gate). The
+`GET /flutter` panel renders taps as cards; **Send** posts a normal `POST /api/pins` batch with
+`page: http://127.0.0.1:<port>/flutter`, `to: 'worker'`, pins carrying `source` + `widget`
+(rects are size-only — the inspector protocol exposes no global screen rect), and screenshots
+as batch `images` in pin order. The worker brief switches to the pre-resolved branch (open
+`file:line`, verify with `dart analyze`, never run/hot-reload the app). The server emits
+`{t:'sent', id}` on the flutter bus; the CLI polls `GET /api/pins/:id` and, when `complete`,
+calls the `reloadSources` **service** flutter_tools registers (full recompile + reload +
+reassemble — never the bare VM `reloadSources`, which does not re-run build()), then posts
+`{t:'reloaded'}` for the panel chip. Taps are in-memory scratch state (ring of 30) until they
+become a batch. Verified against Flutter 3.44 / Dart VM Service protocol.
 
 ## MCP tools (stdio, JSON-RPC 2.0 newline-delimited)
 

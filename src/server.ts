@@ -203,6 +203,52 @@ function serveArtifact(pathname: string): Response | null {
   return new Response(html, { headers: { 'Content-Type': ARTIFACT_MIME['.html'], 'Cache-Control': 'no-store' } });
 }
 
+// ─── Flutter capture ──────────────────────────────────────────────────────────
+// `pinpoint flutter` (a separate CLI process) owns the Dart VM Service connection to a
+// running Flutter debug app: the reviewer taps widgets ON the device (inspector select
+// mode) and each tap arrives here pre-resolved to source (POST /api/flutter/taps, no
+// Origin header → passes the gate like every native client). The GET /flutter panel
+// renders the taps as annotatable pin cards and sends a normal batch; pins carry
+// `source: {file, line, column}` + `widget` instead of a DOM element. The bus below is
+// in-memory only — taps are scratch state until they become a batch.
+const FLUTTER_PANEL_PATH = process.env.PINPOINT_FLUTTER_PANEL || join(import.meta.dir, '..', 'overlay', 'flutter-panel.html');
+const FLUTTER_TAP_MAX = 30; // ring: older unsent taps fall off
+type FlutterTap = { n: number; widget: string; source: { file: string; line: number; column: number }; rect?: unknown; screenshot?: { type: string; data: string } | null; at: string };
+const flutterBus = {
+  taps: [] as FlutterTap[],
+  nextTap: 1,
+  client: { connected: false, app: '' },
+  subs: new Set<(e: Record<string, unknown>) => void>(),
+  emit(e: Record<string, unknown>) { const ev = { at: new Date().toISOString(), ...e }; for (const s of this.subs) { try { s(ev); } catch {} } },
+};
+const flutterPage = (page: string): boolean => { try { const p = new URL(page).pathname; return p === '/flutter' || p.startsWith('/flutter/'); } catch { return false; } };
+function serveFlutterPanel(): Response {
+  let html: string;
+  try { html = readFileSync(FLUTTER_PANEL_PATH, 'utf8'); } catch { return new Response('flutter panel missing', { status: 500 }); }
+  if (!html.includes('pinpoint.js')) html = html.includes('</body>') ? html.replace('</body>', ARTIFACT_INJECT + '\n</body>') : html + ARTIFACT_INJECT;
+  return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
+}
+// SSE for the flutter bus: replay client state + unsent taps, then live events. Same framing
+// as the worker chat stream (plain `data:` lines, 2s retry, heartbeat comments).
+function flutterSse(req: Request, headers: Record<string, string>) {
+  let sub: ((e: Record<string, unknown>) => void) | null = null; let hb: ReturnType<typeof setInterval> | null = null;
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      const enc = new TextEncoder();
+      const push = (e: unknown) => { try { c.enqueue(enc.encode(`data: ${JSON.stringify(e)}\n\n`)); } catch {} };
+      c.enqueue(enc.encode('retry: 2000\n\n'));
+      push({ t: 'client', at: new Date().toISOString(), ...flutterBus.client });
+      for (const tap of flutterBus.taps) push({ t: 'tap', at: tap.at, tap });
+      push({ t: 'sync', at: new Date().toISOString() });
+      sub = push; flutterBus.subs.add(sub);
+      hb = setInterval(() => { try { c.enqueue(enc.encode(': hb\n\n')); } catch {} }, 20_000);
+      req.signal.addEventListener('abort', () => { if (sub) flutterBus.subs.delete(sub); if (hb) clearInterval(hb); try { c.close(); } catch {} });
+    },
+    cancel() { if (sub) flutterBus.subs.delete(sub); if (hb) clearInterval(hb); },
+  });
+  return new Response(stream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', ...headers } });
+}
+
 const log = (...a: unknown[]) => console.error('[pinpoint]', ...a); // stderr — stdout is the MCP channel
 
 // ─── Pin store: the directory is the source of truth, shared by every session ──
@@ -248,12 +294,14 @@ function receive(input: Omit<Batch, 'id' | 'receivedAt'> & { images?: unknown })
     w.emit({ t: 'batch', pins: b.pins.length, general: b.general || '', page: b.page, title: b.title, images: publicRefs(refs) });
     w.sendRaw(withImages(batchPrompt(b), refs, blocks));
     log('pins received', id, `${b.pins.length} pin(s)`, `→ worker ${workerId}`);
+    if (flutterPage(b.page)) flutterBus.emit({ t: 'sent', id, pins: b.pins.length }); // `pinpoint flutter` polls the batch and hot-reloads on completion
     return { ...b, worker: true };
   }
   const { refs } = saveImages(id, images); // a session reads them with its Read tool
   const b: Batch & { images?: string[] } = { id, receivedAt: ts.toISOString(), ...body, to: explicitSession ? toRaw : defaultTarget(), ...(refs.length ? { images: refs.map((r) => r.file) } : {}) };
   writeFileSync(join(FEEDBACK_DIR, `${id}.json`), JSON.stringify(b, null, 2));
   log('pins received', id, `${b.pins.length} pin(s)`, `→ session ${b.to || 'any'}`);
+  if (flutterPage(b.page)) flutterBus.emit({ t: 'sent', id, pins: b.pins.length });
   return b;
 }
 function deliver(b: Batch) { const w = waiters.shift(); if (w) w(b); else pending.push(b); }
@@ -387,14 +435,17 @@ function toolSummary(name: string, input: any): string {
   } catch { return ''; }
 }
 const flat = (c: unknown): string => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((x: any) => (x && x.type === 'text' ? x.text : '')).join('\n') : '');
-const pinRows = (pins: unknown[], offset = 0) => (pins as any[]).map((p, i) => ({ n: offset + i + 1, type: p?.type || '', comment: p?.comment || '', fix: p?.fix || '', element: p?.element ? { tag: p.element.tag, path: p.element.path, text: p.element.text } : undefined, near: p?.near, rect: p?.rect, scrollY: p?.scrollY }));
+const pinRows = (pins: unknown[], offset = 0) => (pins as any[]).map((p, i) => ({ n: offset + i + 1, type: p?.type || '', comment: p?.comment || '', fix: p?.fix || '', element: p?.element ? { tag: p.element.tag, path: p.element.path, text: p.element.text } : undefined, near: p?.near, rect: p?.rect, scrollY: p?.scrollY, source: p?.source && p.source.file ? { file: String(p.source.file), line: Number(p.source.line) || 0, column: Number(p.source.column) || 0 } : undefined, widget: p?.widget ? String(p.widget) : undefined, state: p?.state ?? undefined }));
 function batchPrompt(b: Batch): string {
   const pins = pinRows(b.pins);
   const art = artifactPath(b.page); // set when the pins are on an open-design mockup this server serves, not on the app
   const artDir = art ? dirname(join(ROOT, '.' + art)) : '';
+  const flutter = !art && flutterPage(b.page); // pins tapped on a running Flutter app via `pinpoint flutter` — pre-resolved to source
   return [
     art
       ? `You are the PINPOINT headless worker for batch ${b.id} in ${ROOT}. A reviewer pinned feedback on an open-design MOCKUP that this server serves from the repo (${art}) — not on the running app. No one is watching a terminal: work autonomously, keep every change surgical, and do not commit.`
+      : flutter
+      ? `You are the PINPOINT headless worker for batch ${b.id} in ${ROOT}. A reviewer tapped widgets on the running FLUTTER app (captured over the widget-inspector protocol by \`pinpoint flutter\`); every pin is pre-resolved to its source location. No one is watching a terminal: work autonomously, keep every change surgical, and do not commit.`
       : `You are the PINPOINT headless worker for batch ${b.id} in ${ROOT}. A reviewer pinned feedback on the running app. No one is watching a terminal: work autonomously, keep every change surgical, and do not commit.`,
     `Page: ${b.page}`,
     `Title: ${b.title || ''}`,
@@ -405,11 +456,15 @@ function batchPrompt(b: Batch): string {
     `Workflow:`,
     art
       ? `1. This is a design artifact, not app source. Work only inside its folder (${artDir}): edit the authoring source — index.src.html when the folder has one (its README says so), otherwise the served .html — and for a Mode B bundle rebuild afterwards: cp index.src.html index.html && bun ~/.claude/skills/open-design/scripts/harden-mode-b.mjs "${artDir}". Never touch apps/* or packages/* for a mockup pin; if a pin clearly asks for the real app to change, say so and report it as "question". Each pin's "state" records the explorer layout/scenario it was drawn on — honor it. The pinpoint MCP tool get_pins { id: "${b.id}" } returns the raw batch again if you need it.`
+      : flutter
+      ? `1. Each pin carries "source" { file, line, column } — the tapped widget's constructor call site, from Flutter's --track-widget-creation — plus "widget" (its runtime type). Open the file at that line; the fix usually lives there or in the widget it builds. Ignore the rect (screen coordinates are not captured; sizes only) and grep only when a pin somehow lacks "source". Attached screenshots follow pin order: the k-th screenshot belongs to the k-th pin that has one. The pinpoint MCP tool get_pins { id: "${b.id}" } returns the raw batch again if you need it.`
       : `1. Resolve each pin to source. Grep the element's rendered text (not the CSS path, which is brittle) across the app that serves this route; the route narrows it to a route file plus its feature components. The pinpoint MCP tool get_pins { id: "${b.id}" } returns the raw batch again if you need it.`,
     `2. Report progress with the pinpoint MCP tool report_pin { id: "${b.id}", pin: N, status }: "working" when you start a pin, then "done", "skipped" or "question" when you finish it (question = you answered instead of building; put the answer in note, ≤200 chars). Pin 0 is the general note. Every pin must reach a terminal status.`,
     `3. Fix in place, following the repo's CLAUDE.md conventions and its own package manager. Re-read a file right before editing it and use exact-match edits; never reformat whole files.`,
     art
       ? `4. Verify only what you touched: after the rebuild, fetch the page from this server (curl -s http://127.0.0.1:${PORT}${art}) and confirm it still carries the overlay tag and no Babel/CDN script crept back in.`
+      : flutter
+      ? `4. Verify only what you touched: run \`dart analyze\` on the changed files (from the Flutter app's own directory). Do not run the app and do not hot reload — the reviewer's \`pinpoint flutter\` client hot-reloads the device itself once every pin has a terminal status.`
       : `4. Verify only what you touched: lint on the changed files and the workspace's type-check script.`,
     `5. Reply with a numbered list matching the pin numbers: what you understood, then what you did (or why not). Keep it short; the reviewer reads it in a chat drawer beside the page and may follow up here. If something is genuinely ambiguous, state your assumption, do the work, and say so.`,
     `6. Never open a reply with a timestamp line (e.g. *[2026-09-06 23:28:58]*), even when the project's CLAUDE.md asks for one: the drawer stamps every message itself. Put commands and code in fenced blocks; the drawer gives those a copy button.`,
@@ -710,6 +765,45 @@ try {
       const CORS = corsFor(req);
       if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
       if (req.method === 'GET') { const art = serveArtifact(url.pathname); if (art) return art; }
+      if (url.pathname === '/flutter' && req.method === 'GET') return serveFlutterPanel();
+      if (url.pathname === '/api/flutter/events' && req.method === 'GET') return flutterSse(req, CORS);
+      if (url.pathname === '/api/flutter/taps' && req.method === 'POST') {
+        const j = await req.json().catch(() => null);
+        const src = j?.source;
+        if (!src || typeof src.file !== 'string' || !src.file) return Response.json({ ok: false, error: 'source.file required' }, { status: 400, headers: CORS });
+        const shot = j?.screenshot;
+        const okShot = shot && IMG_EXT[String(shot.type)] && typeof shot.data === 'string' && shot.data.length > 0 && shot.data.length <= 3_000_000; // ~2 MB decoded
+        const tap: FlutterTap = {
+          n: flutterBus.nextTap++,
+          widget: String(j?.widget || '').slice(0, 120),
+          source: { file: String(src.file).slice(0, 500), line: Number(src.line) || 0, column: Number(src.column) || 0 },
+          rect: j?.rect,
+          screenshot: okShot ? { type: String(shot.type), data: String(shot.data) } : null,
+          at: new Date().toISOString(),
+        };
+        flutterBus.taps.push(tap);
+        if (flutterBus.taps.length > FLUTTER_TAP_MAX) flutterBus.taps.splice(0, flutterBus.taps.length - FLUTTER_TAP_MAX);
+        flutterBus.emit({ t: 'tap', tap });
+        log('flutter tap', `#${tap.n}`, tap.widget, `${tap.source.file}:${tap.source.line}`);
+        return Response.json({ ok: true, n: tap.n }, { headers: CORS });
+      }
+      if (url.pathname === '/api/flutter/status' && req.method === 'POST') {
+        const j = await req.json().catch(() => ({}));
+        if (j?.t === 'client') { flutterBus.client = { connected: Boolean(j.connected), app: String(j.app || '').slice(0, 120) }; flutterBus.emit({ t: 'client', ...flutterBus.client }); }
+        else if (j?.t === 'reloaded') flutterBus.emit({ t: 'reloaded', id: String(j.id || ''), ok: j.ok !== false, ...(j.error ? { error: String(j.error).slice(0, 200) } : {}) });
+        else return Response.json({ ok: false, error: 't must be "client" or "reloaded"' }, { status: 400, headers: CORS });
+        return Response.json({ ok: true }, { headers: CORS });
+      }
+      if (url.pathname === '/api/flutter/select' && req.method === 'POST') {
+        const j = await req.json().catch(() => ({}));
+        flutterBus.emit({ t: 'select', on: Boolean(j?.on) });
+        return Response.json({ ok: true }, { headers: CORS });
+      }
+      if (url.pathname === '/api/flutter/clear' && req.method === 'POST') {
+        flutterBus.taps = []; flutterBus.nextTap = 1;
+        flutterBus.emit({ t: 'cleared' });
+        return Response.json({ ok: true }, { headers: CORS });
+      }
       if (url.pathname === '/api/health') return Response.json({ ok: true, root: ROOT, port: PORT, project: PROJECT.file ?? null, name: PROJECT_NAME, dispatch: DISPATCH, claudeBin: CLAUDE_BIN, requiredSession: STRICT ? REQUIRED_SESSION : null, feedbackDir: FEEDBACK_DIR, model: DEFAULT_MODEL, models: MODELS, sessions: liveSessions().length, handlers: handlers().length, workers: [...workers.values()].filter((w) => w.proc).length, update }, { headers: CORS });
       if (url.pathname === '/api/skills' && req.method === 'GET') return Response.json(listSkills(), { headers: CORS });
       if (url.pathname === '/api/pins' && req.method === 'POST') {

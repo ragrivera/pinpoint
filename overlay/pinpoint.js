@@ -1915,5 +1915,7 @@
   }
   dragOrClick(snHd, sn, (x2, y2) => { snUi.pos = { x: x2, y: y2 }; snUiSave(); snPlace(); }, () => snSetCollapsed(!snUi.collapsed));
   snReady = true; snApply(); snBatches.slice().forEach(snTrack); // resume progress cards for batches still in flight
-  window.__designReview = { state, render };
+  // track(id, total): adopt a batch some OTHER code on this page sent (the /flutter panel posts
+  // its own batches) so the progress card polls it and the drawer can pick up its conversation.
+  window.__designReview = { state, render, track: (id, total) => { const b = { id, total: Number(total) || 0, page: location.pathname, at: Date.now() }; snBatches.push(b); snSave(); if (snHidden) snSetHidden(false); snTrack(b); } };
 })();
