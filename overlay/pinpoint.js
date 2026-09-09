@@ -1259,6 +1259,9 @@
   .dr-chat .m .qb:hover,.dr-chat .m .qb:focus-visible{background:rgba(var(--dr-w),.12);border-color:rgba(var(--dr-w),.26);outline:none}
   .dr-chat .m .qb.on{border-color:#39d98a;background:rgba(57,217,138,.14)}
   .dr-chat .m .qa.answered .qb{opacity:.45;cursor:default}.dr-chat .m .qa.answered .qb.on{opacity:1}
+  .dr-chat .m .qb.rec{border-color:rgba(var(--dr-w),.26)}
+  .dr-chat .m .qb .qrec{float:right;margin:1px 0 2px 10px;font:600 9.5px/1.35 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--dr-fg3b)}
+  .dr-chat .m .qb.on .qrec{color:#39d98a}
   .dr-chat .m .qf{display:flex;gap:6px;margin-top:6px}
   .dr-chat .m .qi{flex:1;min-width:0;box-sizing:border-box;background:rgba(var(--dr-w),.05);border:1px solid rgba(var(--dr-w),.14);border-radius:8px;color:var(--dr-fg);font:12px/1.4 ui-monospace,Menlo,SFMono-Regular,monospace;padding:7px 10px;outline:none;cursor:text}
   .dr-chat .m .qi::placeholder{color:var(--dr-fg3b)}.dr-chat .m .qi:focus{border-color:rgba(var(--dr-w),.3)}
@@ -1417,14 +1420,18 @@
   // Submit at the end that sends every answer in one message (chatAnswer). A lone block is just its Submit.
   // A ```question multi block lets several choices be picked; they are sent joined with " + ".
   const MULTI_SEP = ' + ';
+  // A choice may be marked as the one the worker recommends ("Recommended — ", "[Recommended] ",
+  // "**Recommended** — "). The marker is stripped from the label and from the answer that gets sent,
+  // and comes back as a badge on the button — the word never sits inside the sentence.
+  const REC_RE = /^\s*(?:(?:\[\s*recommended\s*\]|\*\*\s*recommended\s*\*\*)\s*[\u2014\u2013:-]?\s*|recommended\s*[\u2014\u2013:-]\s*)(?=\S)/i;
   const parseQuestion = (body, multi) => {
     const q = [], o = [];
-    body.split('\n').forEach((l) => { const m = /^\s*(?:[-*]|\d+[.)])\s+(.+?)\s*$/.exec(l); if (m) o.push(m[1]); else if (l.trim() && !o.length) q.push(l.trim()); });
+    body.split('\n').forEach((l) => { const m = /^\s*(?:[-*]|\d+[.)])\s+(.+?)\s*$/.exec(l); if (m) { const c = m[1].replace(REC_RE, ''); o.push({ c, rec: c !== m[1] }); } else if (l.trim() && !o.length) q.push(l.trim()); });
     return o.length ? { q: q.join(' '), o, multi: Boolean(multi) } : null;
   };
   const stepperHtml = (qs) => {
     const n = qs.length;
-    const steps = qs.map((x, i) => `<div class="qstep${i === 0 ? ' on' : ''}" data-i="${i}" data-q="${esc(x.q)}"${x.multi ? ' data-multi="1"' : ''}>${x.q || x.multi ? '<div class="qq">' + inline(x.q) + (x.multi ? '<span class="qhint">pick any</span>' : '') + '</div>' : ''}<div class="qo">${x.o.map((c) => '<button type="button" class="qb" data-a="' + esc(c) + '">' + inline(c) + '</button>').join('')}</div><form class="qf"><input class="qi" type="text" placeholder="Type your own, or add a note\u2026" autocomplete="off" spellcheck="false"></form></div>`).join('');
+    const steps = qs.map((x, i) => `<div class="qstep${i === 0 ? ' on' : ''}" data-i="${i}" data-q="${esc(x.q)}"${x.multi ? ' data-multi="1"' : ''}>${x.q || x.multi ? '<div class="qq">' + inline(x.q) + (x.multi ? '<span class="qhint">pick any</span>' : '') + '</div>' : ''}<div class="qo">${x.o.map((c) => '<button type="button" class="qb' + (c.rec ? ' rec' : '') + '" data-a="' + esc(c.c) + '">' + (c.rec ? '<span class="qrec">Recommended</span>' : '') + inline(c.c) + '</button>').join('')}</div><form class="qf"><input class="qi" type="text" placeholder="Type your own, or add a note\u2026" autocomplete="off" spellcheck="false"></form></div>`).join('');
     const nav = n > 1 ? `<div class="qnav"><span class="qpos">1 of ${n}</span></div>` : '';
     const act = `<div class="qact">${n > 1 ? '<button type="button" class="qback" style="visibility:hidden">Back</button>' : ''}<span class="sp"></span>${n > 1 ? '<button type="button" class="qnext">Next</button>' : ''}<button type="button" class="qsub"${n > 1 ? ' style="display:none"' : ''}>Submit</button></div>`;
     return `<div class="qa" data-n="${n}">${nav}${steps}${act}</div>`;
@@ -1675,6 +1682,7 @@
         const noteSep = steps.length === 1 ? '\n' : ' \u00b7 ';
         const picks = []; let rest = ans;
         for (;;) {
+          rest = rest.replace(REC_RE, ''); // an answer recorded before the marker was stripped still carries it
           const l = labels.find((x) => rest.startsWith(x) && !picks.includes(x)); if (!l) break;
           picks.push(l); rest = rest.slice(l.length);
           if (st.dataset.multi && rest.startsWith(MULTI_SEP)) { rest = rest.slice(MULTI_SEP.length); continue; }
