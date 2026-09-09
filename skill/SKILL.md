@@ -258,6 +258,30 @@ the reviewer addresses this session explicitly.
 6. Reply as a numbered list matching the on-screen pin numbers: *understood → did (or why
    not)*. Ambiguous pin: ask by number. `type: question` → answer, don't build (still
    `report_pin … question`). `idea` is optional (`skipped` if you don't build it).
+7. **Ask with a `question` fence — never make the reviewer type a choice.** A worker is
+   spawned headless with only the pinpoint MCP loaded, so **`AskUserQuestion` does not exist
+   here**. Its absence is the signal that you are answering into the drawer, *not* evidence
+   that there is no picker: the fence is the picker. Any reply that offers options ends in
+   one — first line the question, each `-` line a choice:
+
+   ````
+   ```question
+   Ship the overlay work?
+   - Recommended — Yes, run /hermes
+   - Commit locally, no push
+   - Leave it uncommitted
+   ```
+   ````
+
+   The overlay renders the choices as buttons plus a free-text box and one Submit;
+   ```` ```question multi ```` lets several be picked (sent joined with ` + `). Several
+   fences in one reply become a stepper with a single Submit at the end.
+
+   Prefix the option you would take with `Recommended — ` (`[Recommended] ` and
+   `**Recommended** — ` also work). The overlay strips that marker and prints it as a dim
+   uppercase label at the right edge of the button, so the word never sits inside the
+   sentence and the answer sent back is the bare label. One option per question carries it;
+   an unmarked list leaves the reviewer guessing.
 
 ## Don'ts
 
@@ -266,6 +290,9 @@ the reviewer addresses this session explicitly.
   you want.
 - Don't point two repos at one pinpoint server: install each (`pinpoint install`) so batches
   land in the right `.docs/pinpoint/feedback/`.
+- Don't hand the reviewer a numbered list and ask them to type back a number, and don't
+  reason from a missing tool to "there is no way to ask" — choices go in a `question`
+  fence (step 7). Typing is for the free-text box, not for picking.
 - Don't commit/PR from a pin reply unless explicitly asked.
 - Don't loosen the Origin check or point the overlay at a non-localhost app: a worker acts
   on whatever is posted to it.
