@@ -1683,6 +1683,7 @@
         if (ev.compacted) return n('status', 'context compacted' + (ev.pre ? ' · ' + (ev.pre / 1000).toFixed(1) + 'k → ' + (ev.post / 1000).toFixed(1) + 'k tokens' : ''));
         if (ev.handoff) return n('status handoff', '<span class="hi" aria-hidden="true">&gt;_</span><b>Handed off to a terminal</b><span class="sub">The resume command is on your clipboard — paste it in a terminal to carry this session on there. A message here starts a new worker on the same session.</span>');
         if (ev.modelSet) return n('status', 'model \u2192 ' + esc(modelLabel(ev.model)) + ' — the worker restarts on it, resuming this session');
+        if (ev.recap) return n('status', 'idle — asking for a recap before the worker exits');
         if (ev.stopping) return n('status', 'worker stopping — ' + esc(ev.stopping));
         if (ev.state === 'starting') return n('status', ev.resume ? 'resuming the worker session…' : 'starting a worker…');
         if (ev.ready) return n('status', 'worker ready' + (ev.model ? ' · ' + esc(ev.model) : ''));
