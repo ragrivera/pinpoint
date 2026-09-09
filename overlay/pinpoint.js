@@ -821,13 +821,26 @@
   const OVKEY = 'design-review:overlays';
   const OV_DEFAULT = { opacity: 1, mode: 'open', hidden: false };
   let ovSettings = { btn: null, hoverFull: true, lookOpen: false, look: { size: 1, blur: 22 }, items: {} };
-  try {
-    const j = JSON.parse(localStorage.getItem(OVKEY) || '{}');
-    ovSettings.btn = j.btn || null; Object.assign(ovSettings.look, j.look || {}); ovSettings.items = j.items || {}; if (j.dock) ovSettings.dock = j.dock;
+  const ovLoad = (j) => {
+    if (!j || typeof j !== 'object') return;
+    if (j.btn !== undefined) ovSettings.btn = j.btn || null; // a partial blob must not move this origin's button
+    Object.assign(ovSettings.look, j.look || {}); Object.assign(ovSettings.items, j.items || {}); if (j.dock) ovSettings.dock = j.dock;
     if (typeof j.hoverFull === 'boolean') ovSettings.hoverFull = j.hoverFull; if (typeof j.lookOpen === 'boolean') ovSettings.lookOpen = j.lookOpen;
     Object.values(ovSettings.items).forEach((it) => { if (it.mode === 'hidden') { it.mode = 'open'; it.hidden = true; } }); // older schema
-  } catch (e) {}
-  const ovSave = () => { try { localStorage.setItem(OVKEY, JSON.stringify(ovSettings)); } catch (e) {} };
+  };
+  let ovHadLocal = false;
+  try { const raw = localStorage.getItem(OVKEY); if (raw) { ovHadLocal = true; ovLoad(JSON.parse(raw)); } } catch (e) {}
+  // localStorage is per ORIGIN, so every app of a project (:4403, :4404, …) would open with its
+  // own Look. The server keeps the last saved copy for the whole project and ships it with BRAND,
+  // so it wins over this origin's cache; localStorage stays the offline fallback.
+  ovLoad(BRAND.look);
+  let lookPut = null;
+  const ovSave = () => {
+    try { localStorage.setItem(OVKEY, JSON.stringify(ovSettings)); } catch (e) {}
+    clearTimeout(lookPut); // dragging a slider fires this on every step — write the project copy once
+    lookPut = setTimeout(() => { try { fetch(API + '/api/look', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ovSettings) }).catch(() => {}); } catch (e) {} }, 400);
+  };
+  if (ovHadLocal && !BRAND.look) ovSave(); // nothing saved project-wide yet: seed it from the first app that opens
   // One persistent config object per overlay — created once, defaults filled in place —
   // so a control's handler can safely hold a reference across re-renders and saves.
   const ovCfg = (id, o) => {

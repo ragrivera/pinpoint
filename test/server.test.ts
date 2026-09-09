@@ -282,3 +282,39 @@ describe('MCP follower', () => {
     expect(prog.complete).toBe(true);
   });
 });
+
+// The Look (size, blur, tint, dock edge) is the reviewer's, not the origin's: localStorage is per
+// port, so the server keeps one copy per project and ships it to every app with BRAND.
+describe('Look', () => {
+  const lookFile = () => join(project.root, '.docs', 'pinpoint', 'look.json');
+  const prelude = async () => {
+    const js = await (await fetch(base + '/pinpoint.js')).text();
+    return JSON.parse(js.slice('window.__reviewBrand = '.length, js.indexOf('\n')).replace(/;$/, ''));
+  };
+
+  test('nothing saved yet: GET is empty and the prelude carries no look', async () => {
+    expect(await (await fetch(base + '/api/look')).json()).toEqual({});
+    expect((await prelude()).look).toBe(null);
+  });
+  test('a saved look persists to disk, reads back, and rides along with every overlay load', async () => {
+    const look = { look: { size: 1.2, blur: 30, tint: '#1d0e34' }, dock: 'left', items: { hub: { opacity: 0.4 } } };
+    expect((await post('/api/look', look, APP_ORIGIN)).status).toBe(200);
+    expect(JSON.parse(readFileSync(lookFile(), 'utf8'))).toEqual(look);
+    expect(await (await fetch(base + '/api/look')).json()).toEqual(look);
+    expect((await prelude()).look).toEqual(look);
+  });
+  test('refuses a non-object body', async () => {
+    const r = await post('/api/look', ['not', 'an', 'object'], APP_ORIGIN);
+    expect(r.status).toBe(400);
+    expect((await r.json()).error).toContain('object');
+  });
+  test('refuses a blob too large to ship with every page load', async () => {
+    const r = await post('/api/look', { items: { big: 'x'.repeat(70_000) } }, APP_ORIGIN);
+    expect(r.status).toBe(413);
+    // the oversized write is refused, so the good copy is still what every app gets
+    expect((await (await fetch(base + '/api/look')).json()).dock).toBe('left');
+  });
+  test('rejects a foreign browser origin like every other route', async () => {
+    expect((await post('/api/look', { look: { tint: '#000000' } }, 'http://evil.example')).status).toBe(403);
+  });
+});
