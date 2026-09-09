@@ -35,8 +35,8 @@
 // repos never share an owner or a feedback dir. No file → cwd + 4991, session dispatch.
 //
 // .pinpoint.json keys: port, name, session, apps[{dir, origin}], dispatch ("worker" |
-// "session"), claudeBin (path), worker { idleMinutes (30), mcp ("pinpoint" | "all"),
-// args ([] extra claude flags) }.
+// "session"), claudeBin (path), worker { idleMinutes (30), recapOnIdle (true),
+// mcp ("pinpoint" | "all"), args ([] extra claude flags) }.
 //
 // Env:  PINPOINT_ROOT        start the .pinpoint.json walk here (default: process.cwd());
 //                            batches land in <root>/.docs/pinpoint/feedback
@@ -59,7 +59,7 @@ import { findProject as findProjectFile } from './config.js';
 import pkg from '../package.json';
 
 type ModelOpt = { id: string; label: string; note?: string };
-type WorkerCfg = { idleMinutes?: number; mcp?: 'pinpoint' | 'all'; args?: string[]; model?: string; models?: Array<string | Partial<ModelOpt>> };
+type WorkerCfg = { idleMinutes?: number; mcp?: 'pinpoint' | 'all'; args?: string[]; model?: string; models?: Array<string | Partial<ModelOpt>>; recapOnIdle?: boolean };
 type Project = { root: string; port?: number; name?: string; file?: string; dispatch?: 'worker' | 'session'; claudeBin?: string; worker?: WorkerCfg; origins: string[]; updateCheck?: boolean };
 function findProject(from: string): Project {
   const { root, file, config: j } = findProjectFile(from);
@@ -88,6 +88,17 @@ const HOME = process.env.HOME || homedir();
 const OVERLAY_PATH = process.env.PINPOINT_OVERLAY || join(import.meta.dir, '..', 'overlay', 'pinpoint.js');
 const CLAUDE_BIN = PROJECT.claudeBin || process.env.PINPOINT_CLAUDE || Bun.which('claude') || join(HOME, '.local', 'bin', 'claude');
 const WORKER_IDLE_MS = Math.max(1, Number(PROJECT.worker?.idleMinutes ?? 30)) * 60_000;
+// The idle timeout is the worker's last moment, and it is the one moment it cannot write for itself:
+// stop() closes its stdin. So spend one short turn asking for a recap first, then let it go. Set
+// worker.recapOnIdle false to exit straight away.
+const RECAP_ON_IDLE = PROJECT.worker?.recapOnIdle !== false;
+const RECAP_GRACE_MS = 120_000; // it never answered — leave anyway
+const RECAP_PROMPT = [
+  'You are about to be closed for inactivity, so this is your last word in this conversation.',
+  'Reply with a recap line and nothing else — no tool calls, no preamble:',
+  '',
+  'recap: Goal was <the ask>; <where it stands now>. Next: <what is on the reviewer>.',
+].join('\n');
 const WORKER_MCP: 'pinpoint' | 'all' = PROJECT.worker?.mcp === 'all' ? 'all' : 'pinpoint';
 const WORKER_ARGS: string[] = Array.isArray(PROJECT.worker?.args) ? PROJECT.worker!.args!.map(String) : [];
 // Which Claude a worker runs (`--model <id>`; the empty id means the claude binary's own
@@ -542,6 +553,7 @@ class Worker {
   private announced = false; // "worker ready" once per process, not once per turn
   subs = new Set<(e: ChatEvent) => void>();
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private recapAsked = false; // one final-recap prompt per idle stretch, never a loop
   private killTimer: ReturnType<typeof setTimeout> | null = null;
   private stopping = false; // stdin already closed: the exit is on its way, do not ask twice
   private spawnedModel = ''; // the --model this process actually started with
@@ -562,6 +574,7 @@ class Worker {
   setState(state: WState, extra?: Record<string, unknown>) { this.rec.state = state; this.saveRec(); this.emit({ t: 'status', state, ...(extra || {}) }); }
   /** Reviewer message (+ screenshots, + pins already appended to this batch): echoed to the transcript, then fed to the worker (spawning / resuming it if needed). */
   send(text: string, images?: unknown, pins?: PinAppend) {
+    this.recapAsked = false; // a real message: this conversation earns another recap when it next goes quiet
     const { refs, blocks } = saveImages(this.rec.batchId, images);
     const withPins = Boolean(pins && pins.count > 0);
     this.emit({ t: 'user', text, images: publicRefs(refs), ...(withPins ? { pins: { first: pins!.first, count: pins!.count } } : {}) });
@@ -654,13 +667,23 @@ class Worker {
         this.rec.turns += 1; this.rec.costUsd += Number(m.total_cost_usd || 0); this.inflight = Math.max(0, this.inflight - 1);
         this.emit({ t: 'result', ok: !m.is_error, subtype: m.subtype, ms: m.duration_ms, cost: m.total_cost_usd, turns: m.num_turns, text: m.is_error ? String(m.result || m.error || 'error') : '' });
         this.setState('idle');
-        this.armIdle();
+        if (this.recapAsked) this.stop('idle timeout'); else this.armIdle(); // the recap was the last turn
         this.applyModel(); // picked mid-turn: end the process now so the next message starts on it
         break;
       default: break; // hooks, rate limits, partials
     }
   }
-  private armIdle() { this.clearIdle(); this.idleTimer = setTimeout(() => this.stop('idle timeout'), WORKER_IDLE_MS); }
+  private armIdle() { this.clearIdle(); this.idleTimer = setTimeout(() => this.idleOut(), WORKER_IDLE_MS); }
+  /** Idle for long enough to close: ask for a recap first so the reviewer comes back to where things
+   *  stand, then exit when that turn's `result` lands (or when the grace runs out). */
+  private idleOut() {
+    if (!RECAP_ON_IDLE || !this.proc || this.recapAsked || this.inflight || !this.rec.turns) { this.stop('idle timeout'); return; }
+    this.recapAsked = true;
+    this.emit({ t: 'status', state: this.rec.state, recap: true }); // the drawer explains the turn that just started
+    log(`worker ${this.rec.workerId} idle — asking for a recap before exit`);
+    this.sendRaw(RECAP_PROMPT); // not send(): a prompt the reviewer did not type does not belong in the transcript as theirs
+    this.clearIdle(); this.idleTimer = setTimeout(() => this.stop('idle timeout'), RECAP_GRACE_MS);
+  }
   private clearIdle() { if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; } }
   /** Pick the Claude this conversation runs. The live process keeps the model it was spawned with,
    *  so the switch lands on the next one — which resumes the same session, losing nothing. */

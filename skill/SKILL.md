@@ -41,7 +41,8 @@ stack shifts left; `R` and the pins keep working. It streams the worker's transc
 (`GET /api/chat/:id/events`, SSE: replay then live — assistant text, tool lines, pin
 progress, turn results) and follow-ups typed there go to the same worker (`POST
 /api/chat/:id`). The worker's stdin stays open, so a follow-up costs no cold start; after
-`worker.idleMinutes` (30) it exits and the next message resumes the same Claude session
+`worker.idleMinutes` (30) it is asked for a closing `recap:` line and then exits; the next message
+resumes the same Claude session
 (`--resume <uuid>`). *stop* in the drawer ends the process early; *Continue in a terminal* (the
 `>_` button, `POST /api/chat/:id/handoff`) ends it too and copies `cd <root> && claude --resume <session>`
 to the clipboard (a handoff card in the transcript confirms it), so the same Claude session

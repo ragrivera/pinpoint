@@ -1283,6 +1283,7 @@
   .dr-chat .m .qb.on .qrec{color:#39d98a}
   .dr-chat .m .rc{margin:8px 0 2px;border-left:2px solid rgba(var(--dr-w),.18);padding:1px 0 1px 9px;color:var(--dr-fg2);font-style:italic}
   .dr-chat .m .rc .rl{display:block;font:600 9.5px/1.7 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--dr-fg3b);font-style:normal}
+  .dr-chat .m .rc.old,.dr-chat .m.rc-only{display:none} /* a superseded recap, and a message that was nothing else */
   .dr-chat .m .qf{display:flex;gap:6px;margin-top:6px}
   .dr-chat .m .qi{flex:1;min-width:0;box-sizing:border-box;background:rgba(var(--dr-w),.05);border:1px solid rgba(var(--dr-w),.14);border-radius:8px;color:var(--dr-fg);font:12px/1.4 ui-monospace,Menlo,SFMono-Regular,monospace;padding:7px 10px;outline:none;cursor:text}
   .dr-chat .m .qi::placeholder{color:var(--dr-fg3b)}.dr-chat .m .qi:focus{border-color:rgba(var(--dr-w),.3)}
@@ -1682,6 +1683,7 @@
         if (ev.compacted) return n('status', 'context compacted' + (ev.pre ? ' · ' + (ev.pre / 1000).toFixed(1) + 'k → ' + (ev.post / 1000).toFixed(1) + 'k tokens' : ''));
         if (ev.handoff) return n('status handoff', '<span class="hi" aria-hidden="true">&gt;_</span><b>Handed off to a terminal</b><span class="sub">The resume command is on your clipboard — paste it in a terminal to carry this session on there. A message here starts a new worker on the same session.</span>');
         if (ev.modelSet) return n('status', 'model \u2192 ' + esc(modelLabel(ev.model)) + ' — the worker restarts on it, resuming this session');
+        if (ev.recap) return n('status', 'idle — asking for a recap before the worker exits');
         if (ev.stopping) return n('status', 'worker stopping — ' + esc(ev.stopping));
         if (ev.state === 'starting') return n('status', ev.resume ? 'resuming the worker session…' : 'starting a worker…');
         if (ev.ready) return n('status', 'worker ready' + (ev.model ? ' · ' + esc(ev.model) : ''));
@@ -1728,7 +1730,20 @@
     if (ev.t === 'user') lockQuestions(ev.text); const node = chatLine(ev); if (!node) return;
     if (ev.t === 'status' && ev.reset) { chatLs.innerHTML = ''; chatAtBottom = true; snForget(chatUi.cur, Date.parse(ev.at)); } // /clear wipes the drawer transcript and the batch's pins: live, and on replay so a reload stays cleared
     if (ev.t === 'tool_error') { const last = [...chatLs.querySelectorAll('.m.tool:not(.err)')].pop(); if (last) last.classList.add('failed'); } // the failed call's dot turns red
-    chatLs.appendChild(node); if (chatAtBottom) chatLs.scrollTop = chatLs.scrollHeight;
+    chatLs.appendChild(node); recapSync(); if (chatAtBottom) chatLs.scrollTop = chatLs.scrollHeight;
+  }
+  // A recap says where the work stands *now*, so only the last one is worth reading: scrolling up a
+  // long conversation should not wade through five of them. Older ones drop out of view (they stay in
+  // the transcript), and a message that was nothing but a recap goes with them.
+  function recapSync() {
+    if (!chatLs) return;
+    const all = [...chatLs.querySelectorAll('.rc')];
+    all.forEach((rc, i) => {
+      const old = i < all.length - 1;
+      rc.classList.toggle('old', old);
+      const m = rc.closest('.m');
+      if (m) m.classList.toggle('rc-only', old && !m.textContent.replace(rc.textContent, '').trim());
+    });
   }
   function chatStatus(state, ev) {
     if (!chatSt) return;

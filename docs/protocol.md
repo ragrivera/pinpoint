@@ -131,5 +131,7 @@ root, env `PINPOINT_ROOT`, `PINPOINT_SESSION_ID=<workerId>`, `PINPOINT_SESSION=w
 message is the batch brief (page, viewport, note, pins, the workflow: resolve → `report_pin` → fix →
 verify → numbered reply); when the page is a mockup this server serves (`/.docs/open-design/**`) the brief
 switches to artifact rules: edit the authoring source inside that folder, rebuild, never touch app code. Follow-ups are `{"type":"user","message":{"role":"user","content":…}}` lines on
-stdin; image blocks travel inline. After `worker.idleMinutes` stdin is closed; the next message restarts
+stdin; image blocks travel inline. After `worker.idleMinutes` the worker is asked for a one-line recap
+(`recap: …`, rendered as its own block in the drawer) and stdin is closed once that turn lands, or after a
+two-minute grace; `worker.recapOnIdle: false` exits straight away. The next message restarts
 with `--resume <uuid>`. Verified against Claude Code 2.1.263.

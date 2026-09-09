@@ -161,6 +161,7 @@ PINPOINT_DETACHED=1 PINPOINT_ROLE=http nohup bun run pinpoint serve > .docs/pinp
   "claudeBin": "/usr/local/bin/claude",           // optional; default `which claude`, else ~/.local/bin/claude
   "worker": {                   // optional
     "idleMinutes": 30,
+    "recapOnIdle": true,        // ask the worker for a one-line recap before the idle timeout closes it
     "mcp": "pinpoint",          // "all" loads every user MCP
     "args": [],                 // extra claude flags
     "model": "",                // preselects the model pill ("" = whatever claude is set to)
