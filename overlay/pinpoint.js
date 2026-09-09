@@ -25,9 +25,15 @@
   // adopts ITS model here, so the pill always names the model you are actually working with.
   const MODELS = Array.isArray(BRAND.models) && BRAND.models.length ? BRAND.models : [];
   const MODEL_KEY = BRAND.key + ':model';
+  const DEFAULT_NOTE = (MODELS.find((m) => !m.id) || {}).note || '';
   const modelPref = () => { let v = null; try { v = localStorage.getItem(MODEL_KEY); } catch (e) {} return v !== null && MODELS.some((m) => m.id === v) ? v : (BRAND.model || ''); };
   const setModelPref = (v) => { try { localStorage.setItem(MODEL_KEY, v); } catch (e) {} };
   const modelLabel = (v) => { const m = MODELS.find((x) => x.id === (v || '')); return m ? m.label : (v || 'Default'); };
+  // "Default" names a setting, not a model. The worker's "ready" event carries the id the claude
+  // binary actually resolved to, so the pill can name it instead of the word Default.
+  let liveModel = '';
+  const prettyModel = (id) => { const s = String(id || '').trim(); const m = MODELS.find((x) => x.id && x.id === s); return m ? m.label : s.replace(/^claude-/, '').replace(/-\d{8}\b/, '').replace(/^([a-z]+)-/, '$1 ').replace(/-(?=\d)/g, '.').replace(/-/g, ' ').trim(); };
+  const modelInUse = (v) => (v ? modelLabel(v) : prettyModel(liveModel) || modelLabel(''));
   let modelLine = null; // the panel's "Model:" line, re-synced when the drawer's pill moves
   const CONTINUE_MS = 30 * 60 * 1000;
   let convoTarget = null, convoForceNew = false, convoLine = null;
@@ -589,7 +595,7 @@
       const menu = el('div', 'dr-to'); menu.style.display = 'none'; menu.setAttribute('role', 'listbox');
       modelLine = () => {
         const cur = modelPref();
-        who.textContent = 'Model: ' + modelLabel(cur);
+        who.textContent = 'Model: ' + modelInUse(cur);
         menu.innerHTML = '';
         MODELS.forEach((m) => {
           const on = m.id === cur;
@@ -815,13 +821,26 @@
   const OVKEY = 'design-review:overlays';
   const OV_DEFAULT = { opacity: 1, mode: 'open', hidden: false };
   let ovSettings = { btn: null, hoverFull: true, lookOpen: false, look: { size: 1, blur: 22 }, items: {} };
-  try {
-    const j = JSON.parse(localStorage.getItem(OVKEY) || '{}');
-    ovSettings.btn = j.btn || null; Object.assign(ovSettings.look, j.look || {}); ovSettings.items = j.items || {}; if (j.dock) ovSettings.dock = j.dock;
+  const ovLoad = (j) => {
+    if (!j || typeof j !== 'object') return;
+    if (j.btn !== undefined) ovSettings.btn = j.btn || null; // a partial blob must not move this origin's button
+    Object.assign(ovSettings.look, j.look || {}); Object.assign(ovSettings.items, j.items || {}); if (j.dock) ovSettings.dock = j.dock;
     if (typeof j.hoverFull === 'boolean') ovSettings.hoverFull = j.hoverFull; if (typeof j.lookOpen === 'boolean') ovSettings.lookOpen = j.lookOpen;
     Object.values(ovSettings.items).forEach((it) => { if (it.mode === 'hidden') { it.mode = 'open'; it.hidden = true; } }); // older schema
-  } catch (e) {}
-  const ovSave = () => { try { localStorage.setItem(OVKEY, JSON.stringify(ovSettings)); } catch (e) {} };
+  };
+  let ovHadLocal = false;
+  try { const raw = localStorage.getItem(OVKEY); if (raw) { ovHadLocal = true; ovLoad(JSON.parse(raw)); } } catch (e) {}
+  // localStorage is per ORIGIN, so every app of a project (:4403, :4404, …) would open with its
+  // own Look. The server keeps the last saved copy for the whole project and ships it with BRAND,
+  // so it wins over this origin's cache; localStorage stays the offline fallback.
+  ovLoad(BRAND.look);
+  let lookPut = null;
+  const ovSave = () => {
+    try { localStorage.setItem(OVKEY, JSON.stringify(ovSettings)); } catch (e) {}
+    clearTimeout(lookPut); // dragging a slider fires this on every step — write the project copy once
+    lookPut = setTimeout(() => { try { fetch(API + '/api/look', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ovSettings) }).catch(() => {}); } catch (e) {} }, 400);
+  };
+  if (ovHadLocal && !BRAND.look) ovSave(); // nothing saved project-wide yet: seed it from the first app that opens
   // One persistent config object per overlay — created once, defaults filled in place —
   // so a control's handler can safely hold a reference across re-renders and saves.
   const ovCfg = (id, o) => {
@@ -1224,9 +1243,9 @@
   .dr-chat-mw{flex:none;position:relative}
   .dr-chat-lt,.dr-chat-rt{display:flex;align-items:center;gap:6px;min-width:0}
   .dr-chat-rt .dr-chat-send{margin-left:5px}
-  .dr-chat-mw .tg{height:28px;padding:0 8px;display:flex;align-items:center;gap:6px;border:1px solid rgba(var(--dr-w),.14);background:rgba(var(--dr-w),.06);border-radius:999px;cursor:pointer;color:var(--dr-fg3);font:700 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}
+  .dr-chat-mw .tg{height:21px;padding:0 7px;display:flex;align-items:center;gap:5px;border:1px solid rgba(var(--dr-w),.12);background:transparent;border-radius:999px;cursor:pointer;color:var(--dr-fg3);font:700 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.05em;text-transform:uppercase;white-space:nowrap}
   .dr-chat-mw .tg:hover,.dr-chat-mw.open .tg{background:rgba(var(--dr-w),.12);color:var(--dr-fg)}
-  .dr-chat-mw .chev{flex:none;display:inline-block;width:5px;height:5px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(1px) rotate(225deg);color:var(--dr-fg3);transition:transform .22s cubic-bezier(.22,.61,.36,1)}
+  .dr-chat-mw .chev{flex:none;display:inline-block;width:4px;height:4px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(1px) rotate(225deg);color:var(--dr-fg3);transition:transform .22s cubic-bezier(.22,.61,.36,1)}
   .dr-chat-mw.open .chev{transform:translateY(-2px) rotate(45deg)}
   .dr-chat-mw .menu{position:absolute;left:0;top:auto;bottom:calc(100% + 6px);z-index:3;min-width:210px;background:rgba(var(--dr-g),.97);border:1px solid rgba(var(--dr-w),.12);border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,.4);padding:4px}
   .dr-chat-mw .it{display:grid;grid-template-columns:12px 1fr;gap:8px;align-items:baseline;padding:6px 8px;border-radius:6px;cursor:pointer;color:var(--dr-fg);font:12px/1.4 ui-monospace,Menlo,monospace}
@@ -1259,6 +1278,9 @@
   .dr-chat .m .qb:hover,.dr-chat .m .qb:focus-visible{background:rgba(var(--dr-w),.12);border-color:rgba(var(--dr-w),.26);outline:none}
   .dr-chat .m .qb.on{border-color:#39d98a;background:rgba(57,217,138,.14)}
   .dr-chat .m .qa.answered .qb{opacity:.45;cursor:default}.dr-chat .m .qa.answered .qb.on{opacity:1}
+  .dr-chat .m .qb.rec{border-color:rgba(var(--dr-w),.26)}
+  .dr-chat .m .qb .qrec{float:right;margin:1px 0 2px 10px;font:600 9.5px/1.35 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--dr-fg3b)}
+  .dr-chat .m .qb.on .qrec{color:#39d98a}
   .dr-chat .m .qf{display:flex;gap:6px;margin-top:6px}
   .dr-chat .m .qi{flex:1;min-width:0;box-sizing:border-box;background:rgba(var(--dr-w),.05);border:1px solid rgba(var(--dr-w),.14);border-radius:8px;color:var(--dr-fg);font:12px/1.4 ui-monospace,Menlo,SFMono-Regular,monospace;padding:7px 10px;outline:none;cursor:text}
   .dr-chat .m .qi::placeholder{color:var(--dr-fg3b)}.dr-chat .m .qi:focus{border-color:rgba(var(--dr-w),.3)}
@@ -1417,14 +1439,18 @@
   // Submit at the end that sends every answer in one message (chatAnswer). A lone block is just its Submit.
   // A ```question multi block lets several choices be picked; they are sent joined with " + ".
   const MULTI_SEP = ' + ';
+  // A choice may be marked as the one the worker recommends ("Recommended — ", "[Recommended] ",
+  // "**Recommended** — "). The marker is stripped from the label and from the answer that gets sent,
+  // and comes back as a badge on the button — the word never sits inside the sentence.
+  const REC_RE = /^\s*(?:(?:\[\s*recommended\s*\]|\*\*\s*recommended\s*\*\*)\s*[\u2014\u2013:-]?\s*|recommended\s*[\u2014\u2013:-]\s*)(?=\S)/i;
   const parseQuestion = (body, multi) => {
     const q = [], o = [];
-    body.split('\n').forEach((l) => { const m = /^\s*(?:[-*]|\d+[.)])\s+(.+?)\s*$/.exec(l); if (m) o.push(m[1]); else if (l.trim() && !o.length) q.push(l.trim()); });
+    body.split('\n').forEach((l) => { const m = /^\s*(?:[-*]|\d+[.)])\s+(.+?)\s*$/.exec(l); if (m) { const c = m[1].replace(REC_RE, ''); o.push({ c, rec: c !== m[1] }); } else if (l.trim() && !o.length) q.push(l.trim()); });
     return o.length ? { q: q.join(' '), o, multi: Boolean(multi) } : null;
   };
   const stepperHtml = (qs) => {
     const n = qs.length;
-    const steps = qs.map((x, i) => `<div class="qstep${i === 0 ? ' on' : ''}" data-i="${i}" data-q="${esc(x.q)}"${x.multi ? ' data-multi="1"' : ''}>${x.q || x.multi ? '<div class="qq">' + inline(x.q) + (x.multi ? '<span class="qhint">pick any</span>' : '') + '</div>' : ''}<div class="qo">${x.o.map((c) => '<button type="button" class="qb" data-a="' + esc(c) + '">' + inline(c) + '</button>').join('')}</div><form class="qf"><input class="qi" type="text" placeholder="Type your own, or add a note\u2026" autocomplete="off" spellcheck="false"></form></div>`).join('');
+    const steps = qs.map((x, i) => `<div class="qstep${i === 0 ? ' on' : ''}" data-i="${i}" data-q="${esc(x.q)}"${x.multi ? ' data-multi="1"' : ''}>${x.q || x.multi ? '<div class="qq">' + inline(x.q) + (x.multi ? '<span class="qhint">pick any</span>' : '') + '</div>' : ''}<div class="qo">${x.o.map((c) => '<button type="button" class="qb' + (c.rec ? ' rec' : '') + '" data-a="' + esc(c.c) + '">' + (c.rec ? '<span class="qrec">Recommended</span>' : '') + inline(c.c) + '</button>').join('')}</div><form class="qf"><input class="qi" type="text" placeholder="Type your own, or add a note\u2026" autocomplete="off" spellcheck="false"></form></div>`).join('');
     const nav = n > 1 ? `<div class="qnav"><span class="qpos">1 of ${n}</span></div>` : '';
     const act = `<div class="qact">${n > 1 ? '<button type="button" class="qback" style="visibility:hidden">Back</button>' : ''}<span class="sp"></span>${n > 1 ? '<button type="button" class="qnext">Next</button>' : ''}<button type="button" class="qsub"${n > 1 ? ' style="display:none"' : ''}>Submit</button></div>`;
     return `<div class="qa" data-n="${n}">${nav}${steps}${act}</div>`;
@@ -1675,6 +1701,7 @@
         const noteSep = steps.length === 1 ? '\n' : ' \u00b7 ';
         const picks = []; let rest = ans;
         for (;;) {
+          rest = rest.replace(REC_RE, ''); // an answer recorded before the marker was stripped still carries it
           const l = labels.find((x) => rest.startsWith(x) && !picks.includes(x)); if (!l) break;
           picks.push(l); rest = rest.slice(l.length);
           if (st.dataset.multi && rest.startsWith(MULTI_SEP)) { rest = rest.slice(MULTI_SEP.length); continue; }
@@ -1729,9 +1756,9 @@
   function modelSync() {
     if (!chatModel) return;
     const cur = modelPref();
-    chatModel._tg.innerHTML = '<span class="lb">' + esc(modelLabel(cur)) + '</span><i class="chev"></i>';
-    chatModel._tg.title = 'Model the worker runs — ' + modelLabel(cur) + (cur ? ' (claude --model ' + cur + ')' : ' (the claude binary\'s own default)');
-    chatModel._menu.querySelectorAll('.it').forEach((it) => { const on = (it.dataset.model || '') === cur; it.setAttribute('aria-selected', String(on)); it.querySelector('.ck').innerHTML = on ? '&#10003;' : ''; });
+    chatModel._tg.innerHTML = '<span class="lb">' + esc(modelInUse(cur)) + '</span><i class="chev"></i>';
+    chatModel._tg.title = 'Model the worker runs — ' + modelInUse(cur) + (cur ? ' (claude --model ' + cur + ')' : liveModel ? ' (the claude binary\'s own default — ' + liveModel + ')' : ' (the claude binary\'s own default)');
+    chatModel._menu.querySelectorAll('.it').forEach((it) => { const id = it.dataset.model || '', on = id === cur; it.setAttribute('aria-selected', String(on)); it.querySelector('.ck').innerHTML = on ? '&#10003;' : ''; const d = id ? null : it.querySelector('.d'); if (d) d.textContent = liveModel ? 'running ' + prettyModel(liveModel) : DEFAULT_NOTE; });
   }
   async function pickModel(id) {
     setModelPref(id); modelSync(); if (modelLine) modelLine();
@@ -1801,6 +1828,7 @@
   async function loadConvos() { try { const r = await fetch(API + BRAND.chat); chatConvos = r.ok ? await r.json() : []; } catch (e) { chatConvos = []; } fillConvos(); }
   function selectConvo(id) {
     if (chatEs) { chatEs.close(); chatEs = null; }
+    liveModel = ''; // re-learned from this conversation's own "ready" event on replay
     chatUi.cur = id || null; chatSave(); if (AUTO_WORKER) refreshConvoTarget();
     const row = id ? chatConvos.find((c) => c.id === id) : null; // the pill names the model in use here
     if (row && typeof row.model === 'string' && row.model !== modelPref()) { setModelPref(row.model); if (modelLine) modelLine(); }
@@ -1812,6 +1840,7 @@
     chatEs = new EventSource(API + BRAND.chat + '/' + encodeURIComponent(id) + '/events');
     chatEs.onmessage = (e) => {
       let ev; try { ev = JSON.parse(e.data); } catch (err) { return; }
+      if (ev.ready && ev.model && String(ev.model) !== liveModel) { liveModel = String(ev.model); modelSync(); if (modelLine) modelLine(); }
       if (ev.t === 'status' || ev.t === 'sync') { chatStatus(ev.state, ev); if (ev.t === 'status') loadConvos(); }
       chatAppend(ev);
     };

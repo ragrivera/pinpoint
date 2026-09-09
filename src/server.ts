@@ -118,6 +118,12 @@ const DEFAULT_MODEL = typeof PROJECT.worker?.model === 'string' && isModel(PROJE
 // Worker state lives beside, not inside, the feedback dir: older pinpoint MCP processes treat
 // every unclaimed *.json in feedback/ as a batch and would claim-rename these files.
 const WORKERS_DIR = join(ROOT, '.docs', 'pinpoint', 'workers');
+// The overlay's Look (size, blur, opacity, hover, layout, dock edge, tint) belongs to the
+// reviewer, not to an origin: localStorage is per port, so :4403 and :4404 would each open
+// with their own. The last saved copy lives here and rides along with BRAND on every load.
+const LOOK_FILE = join(ROOT, '.docs', 'pinpoint', 'look.json');
+const LOOK_MAX = 64_000;
+const savedLook = (): unknown => { try { return JSON.parse(readFileSync(LOOK_FILE, 'utf8')); } catch { return null; } };
 const WORKER_MCP_CFG = join(WORKERS_DIR, 'mcp.json');
 const BRAND = { name: 'Pinpoint', key: 'pinpoint', api: '/api/pins', sessions: '/api/sessions', chat: '/api/chat', dispatch: DISPATCH, server: 'pinpoint', port: PORT, requiredSession: STRICT ? REQUIRED_SESSION : null, models: MODELS, model: DEFAULT_MODEL };
 
@@ -178,7 +184,7 @@ const registry = new Map<string, Session>(); // only meaningful on the HTTP owne
 function upsertSession(s: Omit<Session, 'seenAt'>) { registry.set(s.id, { ...s, seenAt: Date.now() }); }
 function liveSessions(): Session[] { const now = Date.now(); return [...registry.values()].filter((s) => now - s.seenAt < SESSION_TTL_MS).sort((a, b) => a.label.localeCompare(b.label)); }
 // Read per request so overlay edits are live without restarting the MCP.
-const overlay = () => `window.__reviewBrand = ${JSON.stringify({ ...BRAND, update })};\n` + readFileSync(OVERLAY_PATH, 'utf8');
+const overlay = () => `window.__reviewBrand = ${JSON.stringify({ ...BRAND, update, look: savedLook() })};\n` + readFileSync(OVERLAY_PATH, 'utf8');
 
 // ─── Open-design artifacts ────────────────────────────────────────────────────
 // Mockup explorers under <root>/.docs/open-design are served from here with the overlay
@@ -806,6 +812,18 @@ try {
       }
       if (url.pathname === '/api/health') return Response.json({ ok: true, root: ROOT, port: PORT, project: PROJECT.file ?? null, name: PROJECT_NAME, dispatch: DISPATCH, claudeBin: CLAUDE_BIN, requiredSession: STRICT ? REQUIRED_SESSION : null, feedbackDir: FEEDBACK_DIR, model: DEFAULT_MODEL, models: MODELS, sessions: liveSessions().length, handlers: handlers().length, workers: [...workers.values()].filter((w) => w.proc).length, update }, { headers: CORS });
       if (url.pathname === '/api/skills' && req.method === 'GET') return Response.json(listSkills(), { headers: CORS });
+      if (url.pathname === '/api/look') {
+        if (req.method === 'GET') return Response.json(savedLook() ?? {}, { headers: CORS });
+        if (req.method === 'POST') {
+          const j = await req.json().catch(() => null);
+          if (!j || typeof j !== 'object' || Array.isArray(j)) return Response.json({ ok: false, error: 'Look must be an object' }, { status: 400, headers: CORS });
+          const body = JSON.stringify(j, null, 2);
+          // Every /pinpoint.js response carries this blob, so a runaway one would bloat every page load.
+          if (body.length > LOOK_MAX) return Response.json({ ok: false, error: `Look must be under ${LOOK_MAX} bytes` }, { status: 413, headers: CORS });
+          mkdirSync(dirname(LOOK_FILE), { recursive: true }); writeFileSync(LOOK_FILE, body);
+          return Response.json({ ok: true }, { headers: CORS });
+        }
+      }
       if (url.pathname === '/api/pins' && req.method === 'POST') {
         try { const b = receive(await req.json()); return Response.json({ ok: true, id: b.id, worker: Boolean((b as any).worker) }, { headers: CORS }); }
         catch (e: any) { const st = e instanceof PinError ? e.status : 500; log('pins refused', st, e?.message); return Response.json({ ok: false, error: String(e?.message || e), hint: e?.hint ?? null, requiredSession: STRICT ? REQUIRED_SESSION : null }, { status: st, headers: CORS }); }
