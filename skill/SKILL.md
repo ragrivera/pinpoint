@@ -54,6 +54,15 @@ the worker can run. One conversation per batch; the picker lists them newest fir
 (a local label, per browser) and a *close* (`POST /api/chat/:id/close`: ends the worker if
 running and parks its record as `<id>.json.closed` so a restart does not revive it; a running
 worker asks for a second click).
+The **model pill** in the drawer's bar (and the panel's *Model:* line) picks which Claude the
+worker runs — `claude --model <id>`, or the binary's own default. One preference per project,
+kept in the browser, and what the next *Send* uses; selecting a conversation adopts its model so
+the pill always names the one in use. Switching an open conversation (`POST /api/chat/:id/model`)
+cannot re-model a running process, so pinpoint ends it — right away when the worker is quiet,
+after the current turn otherwise — and the next message resumes the same Claude session on the
+new model, losing no context. Offered by default: Default, Fable, Opus, Opus 1M, Sonnet, Haiku;
+`worker.models` in `.pinpoint.json` replaces the list, `worker.model` preselects one, and the
+server refuses anything outside it.
 Transcripts (`<id>.chat.jsonl`) and worker records (`<id>.json`) live in
 `.docs/pinpoint/workers/`; the batch itself stays in `feedback/`.
 
@@ -70,7 +79,7 @@ foreign page from posting into one. Do not widen it.
 `pinpoint_<name>` session claims batches. Either way the **To:** picker can address a live
 session explicitly, and *Headless worker* forces a worker for one batch. Other keys:
 `claudeBin` (path to the `claude` binary; default `which claude` → `~/.local/bin/claude`),
-`worker.args` (extra `claude` flags).
+`worker.args` (extra `claude` flags), `worker.model` / `worker.models` (the model pill).
 
 ## Many sessions — who gets the batch? (session dispatch)
 
