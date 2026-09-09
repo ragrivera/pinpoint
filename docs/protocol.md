@@ -68,16 +68,17 @@ All `/api/*` routes check `Origin`: allowed are the origins in `.pinpoint.json` 
 |---|---|
 | `GET /pinpoint.js` | the overlay, prefixed with `window.__reviewBrand = {…}` (name, key, api paths, dispatch, port, requiredSession) |
 | `GET /.docs/open-design/**` | the project's open-design mockups (rooted at `<root>/.docs/open-design`); `.html` is served with the overlay `<script>` injected; the only static tree |
-| `GET /api/health` | `{ ok, root, port, project, name, dispatch, claudeBin, requiredSession, feedbackDir, sessions, handlers, workers }` |
+| `GET /api/health` | `{ ok, root, port, project, name, dispatch, claudeBin, requiredSession, feedbackDir, sessions, handlers, workers, update }` — `update` is `null` until the 4-hourly tag check has run, then `{ current, latest, available, checkedAt, repo, command }` (also on the overlay prelude) |
 | `POST /api/pins` | receive a batch → `{ ok, id, worker }`; `409` with `hint` when session dispatch has no handler; `503` when a follower is asked to spawn a worker |
 | `GET /api/pins/:id` | progress: `{ id, page, to, claimedBy, claimedLabel, worker, total, noteOnly, resolved, complete, progress }` |
 | `GET /api/sessions` | live sessions for the To: picker (handlers only on installed projects) |
 | `POST /api/sessions` | heartbeat from follower MCP processes `{ id, label, cwd }` |
 | `GET /api/skills` | skills + commands a worker can run (`~/.claude` and `<root>/.claude`, plus `/clear`, `/compact`) |
-| `GET /api/chat` | worker conversations, newest first |
+| `GET /api/chat` | worker conversations, newest first (each with its Claude `session` id) |
 | `GET /api/chat/:id/events` | SSE: transcript replay, then live events |
 | `POST /api/chat/:id` | `{ text?, images?, pins? }` → to the worker (pins are appended to the batch, numbered on; a `/clear` text empties the batch's pins so the next ones start at #1 again) |
 | `POST /api/chat/:id/stop` | end the worker process (a later message resumes the session) |
+| `POST /api/chat/:id/handoff` | continue in a terminal: end the worker (if running) and note it in the transcript as a `status` with `handoff: true` + the command; returns `{ ok, command, cwd, session }` (the overlay builds the same `cd <root> && claude --resume <session>` from `/api/health` + the row's `session` and puts it on the clipboard rather than showing it) |
 | `POST /api/chat/:id/close` | end the worker (if running) and drop the conversation from `/api/chat`; its record parks as `<id>.json.closed`, transcript + images stay |
 | `GET /api/chat/:id/img/:file` | a screenshot from the transcript |
 | `GET /flutter` | the Flutter capture panel (served with the overlay `<script>` injected) |

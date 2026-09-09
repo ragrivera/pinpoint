@@ -6,6 +6,7 @@ import { BIN, cleanEnv, freePort, mcpClient, tmpProject, waitFor } from './helpe
 const APP_ORIGIN = 'http://acme.localhost:5173';
 let port: number;
 let project: ReturnType<typeof tmpProject>;
+let upstream: ReturnType<typeof tmpProject>; // a fake package repo with version tags for the update check
 let owner: ReturnType<typeof Bun.spawn>;
 let base: string;
 const feedback = () => join(project.root, '.docs', 'pinpoint', 'feedback');
@@ -20,10 +21,13 @@ beforeAll(async () => {
     '.docs/pinpoint/workers/old-batch.json': JSON.stringify({ batchId: 'old-batch', workerId: 'w1', sessionUuid: '00000000-0000-0000-0000-000000000000', page: `${APP_ORIGIN}/home`, title: 'Home', state: 'idle', started: true, startedAt: '2026-01-01T00:00:00.000Z', lastAt: '2026-01-01T00:00:00.000Z', turns: 1, costUsd: 0 }),
   });
   base = `http://127.0.0.1:${port}`;
-  owner = Bun.spawn(['bun', BIN, 'serve'], { cwd: project.root, env: cleanEnv({ PINPOINT_ROOT: project.root, PINPOINT_ROLE: 'http', PINPOINT_DETACHED: '1' }), stdout: 'ignore', stderr: 'pipe' });
+  upstream = tmpProject({ 'README.md': 'pinpoint' });
+  const git = (...a: string[]) => { const r = Bun.spawnSync(['git', '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...a], { cwd: upstream.root }); if (r.exitCode !== 0) throw new Error(r.stderr.toString()); };
+  git('init', '-q'); git('add', '-A'); git('commit', '-q', '-m', 'init'); git('tag', 'v0.1.0'); git('tag', 'v9.9.9'); git('tag', 'not-a-version');
+  owner = Bun.spawn(['bun', BIN, 'serve'], { cwd: project.root, env: cleanEnv({ PINPOINT_ROOT: project.root, PINPOINT_ROLE: 'http', PINPOINT_DETACHED: '1', PINPOINT_UPDATE_REPO: upstream.root }), stdout: 'ignore', stderr: 'pipe' });
   await waitFor(async () => (await fetch(base + '/api/health')).ok, 15000);
 }, 20000);
-afterAll(() => { try { owner.kill(); } catch {} project.rm(); });
+afterAll(() => { try { owner.kill(); } catch {} project.rm(); upstream.rm(); });
 
 describe('HTTP owner', () => {
   test('health reports the project', async () => {
@@ -33,6 +37,15 @@ describe('HTTP owner', () => {
     expect(h.root).toBe(project.root);
     expect(h.dispatch).toBe('session');
     expect(h.requiredSession).toBe('pinpoint_acme');
+  });
+  test('reports a newer version from the package repo tags on health and in the prelude', async () => {
+    await waitFor(async () => Boolean((await (await fetch(base + '/api/health')).json()).update), 10000);
+    const h = await (await fetch(base + '/api/health')).json();
+    expect(h.update).toMatchObject({ latest: '9.9.9', available: true, repo: upstream.root });
+    expect(h.update.command).toContain('9.9.9');
+    const js = await (await fetch(base + '/pinpoint.js')).text();
+    const brand = JSON.parse(js.slice('window.__reviewBrand = '.length, js.indexOf('\n')).replace(/;$/, ''));
+    expect(brand.update).toMatchObject({ latest: '9.9.9', available: true });
   });
   test('serves the overlay with the pinpoint brand prelude', async () => {
     const js = await (await fetch(base + '/pinpoint.js')).text();
@@ -50,6 +63,19 @@ describe('HTTP owner', () => {
     expect(await r.text()).toContain('<script src="/pinpoint.js" defer></script>\n</body>');
     expect((await fetch(base + '/.docs/open-design/demo/missing.html')).status).toBe(404);
     expect((await fetch(base + '/.pinpoint.json')).status).toBe(404); // nothing else is served statically
+  });
+  test('handoff ends the worker and posts the resume command for its Claude session', async () => {
+    const r = await post('/api/chat/old-batch/handoff', {}, APP_ORIGIN);
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j).toMatchObject({ ok: true, cwd: project.root, session: '00000000-0000-0000-0000-000000000000' });
+    expect(j.command).toContain(project.root);
+    expect(j.command).toEndWith(' && claude --resume 00000000-0000-0000-0000-000000000000');
+    const chats = await (await fetch(base + '/api/chat')).json();
+    expect(chats.find((c: any) => c.id === 'old-batch').session).toBe('00000000-0000-0000-0000-000000000000');
+    // the transcript keeps the command, so the drawer shows it again after a reload
+    const lines = readFileSync(join(project.root, '.docs', 'pinpoint', 'workers', 'old-batch.chat.jsonl'), 'utf8').trim().split('\n');
+    expect(JSON.parse(lines[lines.length - 1])).toMatchObject({ t: 'status', handoff: true, command: j.command });
   });
   test('close drops a worker conversation and parks its record so a restart does not revive it', async () => {
     let chats = await (await fetch(base + '/api/chat')).json();
