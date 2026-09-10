@@ -2,9 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.6.0] - 2026-09-10
 
 ### Features
+- ✨ Effort pill beside the model pill in the drawer's composer: pick `--effort
+  low|medium|high|xhigh|max` per project, adopted from a conversation when you open it, and applied
+  the way a model switch is — the idle process is ended and the next message resumes the same
+  session with the new flag. The CLI never reports the effort it settled on, so an unset pill reads
+  "effort" rather than naming a default (overlay, server)
+- ✨ Attach any file, not just screenshots — picker, paste and drop. An image is still downscaled
+  and sent inline; anything else is written to `workers/<id>/file-*.ext` and named in the prompt, so
+  the worker Reads it instead of carrying base64 into the context. Only a `[A-Za-z0-9]{1,8}`
+  extension from the reviewer's filename reaches the path, and a non-image is served back as an
+  octet-stream download so an attached `.html` cannot run on the overlay's origin (overlay, server)
+- ✨ Idle conversations count down to their close in the conversation picker — `30m`, then `45s`,
+  then `now` — from the row's `lastAt` and the `idleMinutes` / `recapOnIdle` the server now
+  advertises in `BRAND`. Ticked in place every 10s, and not at all while the drawer is closed
+  (overlay, server)
 - ✨ Workers publish artifacts themselves. `claude -p` leaves the `Artifact` tool off unless
   `CLAUDE_CODE_ARTIFACT` is on (Claude Code's `sdk_default_off` gate), so a worker asked for an artifact could
   only build a file and hand the reviewer a step. Every worker now starts with `CLAUDE_CODE_ARTIFACT=1`; brief
@@ -25,8 +39,14 @@ All notable changes to this project will be documented in this file.
   belongs there, not in the history (overlay)
 - 💄 "turn done · 9s · $0.12" no longer trails a recap: the recap says the work is closed. A
   failed turn still gets its row (overlay)
+- 💄 State chips line up down the conversation picker: the countdown takes its own column, and state
+  and countdown get fixed widths (50px fits STARTING), both right-aligned, so the row icons stay put
+  whether or not a countdown is showing (overlay)
 
 ### Fixed
+- 🐛 A question's last answer wins: tapping a choice and then typing sent both, joined by a newline.
+  Typing now releases the tap (every pick, in a multi-select step) and tapping clears what was typed;
+  the placeholder reads "Type your own instead…" (overlay)
 - 🐛 A headless worker no longer tells the reviewer it "can't" do what an interactive session can. It
   usually lacks `Artifact`, `AskUserQuestion`, plan mode and the claude.ai connectors, and once spent five
   turns arguing it could not make an artifact. Brief step 8 now says to use such a tool when it is listed, and otherwise that a missing tool is
