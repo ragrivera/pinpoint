@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Features
+- ✨ Workers publish artifacts themselves. `claude -p` leaves the `Artifact` tool off unless
+  `CLAUDE_CODE_ARTIFACT` is on (Claude Code's `sdk_default_off` gate), so a worker asked for an artifact could
+  only build a file and hand the reviewer a step. Every worker now starts with `CLAUDE_CODE_ARTIFACT=1`; brief
+  step 8 says to publish and reply with the link. `worker.artifacts: false` turns it off, and wins over a value the
+  server inherited (server)
+
 ### Changed
 - 💄 The recap is drawn as a dashed frame with its label notched into the top edge, the way a
   legend sits in a fieldset. The three edges are painted with repeating gradients rather than a
@@ -27,11 +34,14 @@ All notable changes to this project will be documented in this file.
   in a terminal* or `cd <root> && claude --resume <session>`, which `batchPrompt` now receives, with the root shell-quoted the same way *Continue in a terminal* quotes it (server)
 
 ### Tests
+- ✅ Workers start with `CLAUDE_CODE_ARTIFACT=1`, `worker.artifacts: false` forces `0` over an inherited `1`, and the brief says to reply with the link (server)
+- ✅ Evals re-run against real `claude -p` workers: artifacts are published and the reply carries the link; a fifth eval covers `worker.artifacts: false` (skill)
 - ✅ The spawned worker's stdin carries the step-8 rule and its own `claude --resume <session>` (server)
 - ✅ `skill/evals/evals.json`: four behavioural evals — artifact on first ask, pushback after a markdown
   file, "another session did it", plan-mode request — with a synthetic meeting-notes fixture (skill)
 
 ### Documentation
+- 📝 Skill, README and protocol: workers publish artifacts; `worker.artifacts` (skill, docs)
 - 📝 Skill: *A missing tool is not a missing capability* under Headless workers, cross-referenced from
   step 7 and the Don'ts (skill)
 - 📝 Skill step 7 now tells the worker that `AskUserQuestion` does not exist for it and that the

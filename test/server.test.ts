@@ -201,6 +201,7 @@ describe('worker dispatch spawns claude with the picked model', () => {
       'fake-claude.sh': [
         '#!/bin/sh',
         'printf \'%s\\n\' "$@" > "$(dirname "$0")/argv-$$.txt"',
+        'printf \'%s\\n\' "${CLAUDE_CODE_ARTIFACT-unset}" > "$(dirname "$0")/artifact-env-$$.txt"',
         'echo \'{"type":"system","subtype":"init","model":"stub"}\'',
         'while IFS= read -r line; do',
         '  printf \'%s\\n\' "$line" >> "$(dirname "$0")/stdin-$$.txt"',
@@ -282,6 +283,20 @@ describe('worker dispatch spawns claude with the picked model', () => {
     expect(raw).toContain('A missing tool is not a missing capability');
     expect(raw).toContain('Artifact');
     expect(raw).toContain(`claude --resume ${chat.session}`);
+    expect(raw).toContain('reply with the link');
+  }, 20000);
+
+  // claude -p leaves the Artifact tool off unless CLAUDE_CODE_ARTIFACT is on. Without it a worker asked for an
+  // artifact can only hand the reviewer a step; with it the worker publishes and replies with the link.
+  test('every worker starts with CLAUDE_CODE_ARTIFACT=1, so it has the Artifact tool', async () => {
+    const id = await sendBatch('');
+    await spawnedFor(id);
+    let vals: string[] = [];
+    await waitFor(async () => {
+      vals = readdirSync(wProject.root).filter((n) => n.startsWith('artifact-env-')).map((n) => readFileSync(join(wProject.root, n), 'utf8').trim());
+      return vals.length > 0;
+    }, 10000);
+    expect(vals.every((v) => v === '1')).toBe(true);
   }, 20000);
 
   test('leaves --model off when the batch picks the default', async () => {
@@ -390,4 +405,46 @@ describe('Look', () => {
   test('rejects a foreign browser origin like every other route', async () => {
     expect((await post('/api/look', { look: { tint: '#000000' } }, 'http://evil.example')).status).toBe(403);
   });
+});
+
+// worker.artifacts: false is the project's way out. It has to win over a server that inherited the switch from
+// its own environment (a Claude session's .mcp.json env, say), so the worker gets CLAUDE_CODE_ARTIFACT=0.
+describe('worker.artifacts: false', () => {
+  const ORIGIN = 'http://noart.localhost:5173';
+  let port: number;
+  let project: ReturnType<typeof tmpProject>;
+  let owner: ReturnType<typeof Bun.spawn>;
+  let base: string;
+
+  beforeAll(async () => {
+    port = await freePort();
+    project = tmpProject({
+      'fake-claude.sh': [
+        '#!/bin/sh',
+        'printf \'%s\\n\' "${CLAUDE_CODE_ARTIFACT-unset}" > "$(dirname "$0")/artifact-env-$$.txt"',
+        'echo \'{"type":"system","subtype":"init","model":"stub"}\'',
+        'while IFS= read -r line; do',
+        '  echo \'{"type":"result","subtype":"success","is_error":false,"duration_ms":1,"num_turns":1,"total_cost_usd":0}\'',
+        'done',
+      ].join('\n') + '\n',
+    });
+    writeFileSync(join(project.root, '.pinpoint.json'), JSON.stringify({ port, name: 'noart', dispatch: 'worker', claudeBin: join(project.root, 'fake-claude.sh'), worker: { artifacts: false }, apps: [{ dir: '.', origin: ORIGIN }] }));
+    Bun.spawnSync(['chmod', '+x', join(project.root, 'fake-claude.sh')]);
+    base = `http://127.0.0.1:${port}`;
+    owner = Bun.spawn(['bun', BIN, 'serve'], { cwd: project.root, env: cleanEnv({ PINPOINT_ROOT: project.root, PINPOINT_ROLE: 'http', PINPOINT_DETACHED: '1', PINPOINT_NO_UPDATE_CHECK: '1', CLAUDE_CODE_ARTIFACT: '1' }), stdout: 'ignore', stderr: 'pipe' });
+    await waitFor(async () => (await fetch(base + '/api/health')).ok, 15000);
+  }, 20000);
+  afterAll(() => { try { owner.kill(); } catch {} project.rm(); });
+
+  test('turns the Artifact tool off even when the server environment has it on', async () => {
+    const r = await fetch(base + '/api/pins', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: ORIGIN }, body: JSON.stringify({ page: `${ORIGIN}/home`, title: 'Home', general: 'look at this', pins: [], to: 'worker' }) });
+    expect(r.status).toBe(200);
+    let v = '';
+    await waitFor(async () => {
+      const f = readdirSync(project.root).find((n) => n.startsWith('artifact-env-'));
+      v = f ? readFileSync(join(project.root, f), 'utf8').trim() : '';
+      return Boolean(v);
+    }, 10000);
+    expect(v).toBe('0');
+  }, 20000);
 });
