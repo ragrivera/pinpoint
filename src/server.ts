@@ -136,7 +136,7 @@ const LOOK_FILE = join(ROOT, '.docs', 'pinpoint', 'look.json');
 const LOOK_MAX = 64_000;
 const savedLook = (): unknown => { try { return JSON.parse(readFileSync(LOOK_FILE, 'utf8')); } catch { return null; } };
 const WORKER_MCP_CFG = join(WORKERS_DIR, 'mcp.json');
-const BRAND = { name: 'Pinpoint', key: 'pinpoint', api: '/api/pins', sessions: '/api/sessions', chat: '/api/chat', dispatch: DISPATCH, server: 'pinpoint', port: PORT, requiredSession: STRICT ? REQUIRED_SESSION : null, models: MODELS, model: DEFAULT_MODEL };
+const BRAND = { name: 'Pinpoint', key: 'pinpoint', api: '/api/pins', sessions: '/api/sessions', chat: '/api/chat', dispatch: DISPATCH, server: 'pinpoint', port: PORT, requiredSession: STRICT ? REQUIRED_SESSION : null, models: MODELS, model: DEFAULT_MODEL, idleMinutes: WORKER_IDLE_MS / 60_000, recapOnIdle: RECAP_ON_IDLE };
 
 // ─── Update check ─────────────────────────────────────────────────────────────
 // So people notice a newer pinpoint: at most once every 4 hours — on owner start and whenever a worker
