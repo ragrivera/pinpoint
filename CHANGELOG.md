@@ -19,7 +19,21 @@ All notable changes to this project will be documented in this file.
 - 💄 "turn done · 9s · $0.12" no longer trails a recap: the recap says the work is closed. A
   failed turn still gets its row (overlay)
 
+### Fixed
+- 🐛 A headless worker no longer tells the reviewer it "can't" do what an interactive session can. It
+  usually lacks `Artifact`, `AskUserQuestion`, plan mode and the claude.ai connectors, and once spent five
+  turns arguing it could not make an artifact. Brief step 8 now says to use such a tool when it is listed, and otherwise that a missing tool is
+  not a missing capability: build what needs no missing tool, then name the finishing step in one line — *Continue
+  in a terminal* or `cd <root> && claude --resume <session>`, which `batchPrompt` now receives, with the root shell-quoted the same way *Continue in a terminal* quotes it (server)
+
+### Tests
+- ✅ The spawned worker's stdin carries the step-8 rule and its own `claude --resume <session>` (server)
+- ✅ `skill/evals/evals.json`: four behavioural evals — artifact on first ask, pushback after a markdown
+  file, "another session did it", plan-mode request — with a synthetic meeting-notes fixture (skill)
+
 ### Documentation
+- 📝 Skill: *A missing tool is not a missing capability* under Headless workers, cross-referenced from
+  step 7 and the Don'ts (skill)
 - 📝 Skill step 7 now tells the worker that `AskUserQuestion` does not exist for it and that the
   `question` fence is the picker, with the fence syntax, `question multi` and the stepper, before
   the `Recommended` marker it used to open with (skill)
