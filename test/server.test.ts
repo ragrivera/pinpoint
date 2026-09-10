@@ -115,6 +115,32 @@ describe('HTTP owner', () => {
     expect((await bad.json()).hint).toContain('worker.models');
     expect(JSON.parse(readFileSync(join(project.root, '.docs', 'pinpoint', 'workers', 'model-batch.json'), 'utf8')).model).toBe('sonnet');
   });
+  test('sets a conversation effort, persists it on the record, and refuses one it does not offer', async () => {
+    const r = await post('/api/chat/model-batch/effort', { effort: 'xhigh' }, APP_ORIGIN);
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ ok: true, effort: 'xhigh' });
+    const chats = await (await fetch(base + '/api/chat')).json();
+    expect(chats.find((c: any) => c.id === 'model-batch').effort).toBe('xhigh');
+    const rec = JSON.parse(readFileSync(join(project.root, '.docs', 'pinpoint', 'workers', 'model-batch.json'), 'utf8'));
+    expect(rec.effort).toBe('xhigh'); // a restart brings the choice back, like the model
+    const lines = readFileSync(join(project.root, '.docs', 'pinpoint', 'workers', 'model-batch.chat.jsonl'), 'utf8').trim().split('\n');
+    expect(JSON.parse(lines[lines.length - 1])).toMatchObject({ t: 'status', effortSet: true, effort: 'xhigh' });
+    const bad = await post('/api/chat/model-batch/effort', { effort: 'ludicrous' }, APP_ORIGIN);
+    expect(bad.status).toBe(400);
+    expect(JSON.parse(readFileSync(join(project.root, '.docs', 'pinpoint', 'workers', 'model-batch.json'), 'utf8')).effort).toBe('xhigh');
+  });
+  test('offers the effort levels on health and in the prelude', async () => {
+    const h = await (await fetch(base + '/api/health')).json();
+    expect(h.efforts.map((e: any) => e.id)).toEqual(['', 'low', 'medium', 'high', 'xhigh', 'max']);
+    const js = await (await fetch(base + '/pinpoint.js')).text();
+    const brand = JSON.parse(js.slice('window.__reviewBrand = '.length, js.indexOf('\n')).replace(/;$/, ''));
+    expect(brand.efforts[0]).toMatchObject({ id: '', label: 'Default' });
+  });
+  test('refuses a batch asking for an effort the server does not offer', async () => {
+    const r = await post('/api/pins', { ...batch(), effort: 'ludicrous' }, APP_ORIGIN);
+    expect(r.status).toBe(400);
+    expect((await r.json()).error).toContain('Unknown effort');
+  });
   test('refuses a batch asking for a model the server does not offer', async () => {
     const r = await post('/api/pins', { ...batch(), model: 'gpt-9' }, APP_ORIGIN);
     expect(r.status).toBe(400);
@@ -189,8 +215,8 @@ describe('worker dispatch spawns claude with the picked model', () => {
   }, 20000);
   afterAll(() => { try { wOwner.kill(); } catch {} wProject.rm(); });
 
-  const sendBatch = async (model?: string) => {
-    const r = await fetch(wBase + '/api/pins', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: ORIGIN }, body: JSON.stringify({ page: `${ORIGIN}/home`, title: 'Home', general: 'look at this', pins: [], to: 'worker', ...(model === undefined ? {} : { model }) }) });
+  const sendBatch = async (model?: string, extra: Record<string, unknown> = {}) => {
+    const r = await fetch(wBase + '/api/pins', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: ORIGIN }, body: JSON.stringify({ page: `${ORIGIN}/home`, title: 'Home', general: 'look at this', pins: [], to: 'worker', ...(model === undefined ? {} : { model }), ...extra }) });
     expect(r.status).toBe(200);
     return (await r.json()).id as string;
   };
@@ -246,6 +272,34 @@ describe('worker dispatch spawns claude with the picked model', () => {
     expect(a).not.toContain('--model');
     expect(chat.model).toBe('');
   }, 20000);
+
+  test('passes --effort through to claude, and leaves it off for the default', async () => {
+    const id = await sendBatch('', { effort: 'xhigh' });
+    const { a, chat } = await spawnedFor(id);
+    expect(a[a.indexOf('--effort') + 1]).toBe('xhigh');
+    expect(chat.effort).toBe('xhigh');
+    const plain = await sendBatch('');
+    expect((await spawnedFor(plain)).a).not.toContain('--effort');
+  }, 30000);
+
+  test('an attached file is saved beside the transcript and named in the worker prompt', async () => {
+    const data = Buffer.from('id,name\n1,acme\n').toString('base64');
+    const id = await sendBatch('', { images: [{ name: 'customers.csv', type: 'text/csv', data }] });
+    await spawnedFor(id);
+    const dir = join(wProject.root, '.docs', 'pinpoint', 'workers', id);
+    const saved = readdirSync(dir).find((f) => f.startsWith('file-') && f.endsWith('.csv'));
+    expect(saved).toBeTruthy();
+    expect(readFileSync(join(dir, saved!), 'utf8')).toBe('id,name\n1,acme\n'); // written as-is, not re-encoded
+    const served = await fetch(`${wBase}/api/chat/${encodeURIComponent(id)}/img/${saved}`, { headers: { Origin: ORIGIN } });
+    expect(served.status).toBe(200);
+    // handed back as a download: an attached .html must not run as script on the pinpoint origin
+    expect(served.headers.get('content-type')).toBe('application/octet-stream');
+    expect(served.headers.get('content-disposition')).toContain('attachment');
+    expect(served.headers.get('x-content-type-options')).toBe('nosniff');
+    // the worker is told where it is, since a non-image cannot travel inline
+    const line = readFileSync(join(wProject.root, '.docs', 'pinpoint', 'workers', `${id}.chat.jsonl`), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).find((e: any) => e.t === 'batch');
+    expect(line.images[0]).toMatchObject({ name: 'customers.csv', img: false });
+  }, 30000);
 });
 
 describe('MCP follower', () => {
