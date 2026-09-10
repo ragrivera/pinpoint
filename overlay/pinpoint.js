@@ -1224,13 +1224,16 @@
   .dr-chat-sel .tg{width:100%;display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;border:1px solid rgba(var(--dr-w),.12);background:rgba(var(--dr-w),.05);color:var(--dr-fg);font:12px/1.4 ui-monospace,Menlo,monospace;cursor:pointer;text-align:left}
   .dr-chat-sel .tg:hover,.dr-chat-sel.open .tg{background:rgba(var(--dr-w),.09)}
   .dr-chat-sel .lb{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .dr-chat-sel .st{flex:none;font:600 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--dr-fg3b)}
+  /* Every row is its own grid, so auto columns size per row and never line up across rows: the state
+     and the countdown get fixed widths instead. 50px fits STARTING, the longest state. */
+  .dr-chat-sel .st{width:50px;flex:none;font:600 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--dr-fg3b);text-align:right}
   .dr-chat-sel .st.working,.dr-chat-sel .st.starting{color:#ffb457}.dr-chat-sel .st.idle{color:#39d98a}.dr-chat-sel .st.error{color:#ff8a8e}
-  .dr-chat-sel .cd{margin-left:5px;color:var(--dr-fg3);text-transform:none;letter-spacing:.06em}
+  .dr-chat-sel .cd{width:30px;flex:none;text-align:right;font:600 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em;color:var(--dr-fg3)}
+  .dr-chat-sel .tg .cd:empty{width:0} /* the trigger is a single row: nothing to align, so no dead gap */
   .dr-chat-sel .chev{flex:none;display:inline-block;width:5px;height:5px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-2px) rotate(45deg);color:var(--dr-fg3);transition:transform .22s cubic-bezier(.22,.61,.36,1)}
   .dr-chat-sel.open .chev{transform:translateY(1px) rotate(225deg)}
   .dr-chat-sel .menu{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:2;max-height:280px;overflow-y:auto;background:rgba(var(--dr-g),.97);border:1px solid rgba(var(--dr-w),.12);border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,.4);padding:4px;scrollbar-width:thin;scrollbar-color:rgba(var(--dr-w),.18) transparent}
-  .dr-chat-sel .it{display:grid;grid-template-columns:12px 1fr auto auto auto;gap:8px;align-items:center;padding:6px 8px;border-radius:6px;cursor:pointer;color:var(--dr-fg);font:12px/1.4 ui-monospace,Menlo,monospace}
+  .dr-chat-sel .it{display:grid;grid-template-columns:12px 1fr auto auto auto auto;gap:8px;align-items:center;padding:6px 8px;border-radius:6px;cursor:pointer;color:var(--dr-fg);font:12px/1.4 ui-monospace,Menlo,monospace}
   .dr-chat-sel .it:hover{background:rgba(var(--dr-w),.08)}.dr-chat-sel .it.new{color:var(--dr-fg3b)}.dr-chat-sel .it.dis{opacity:.6;cursor:default}
   .dr-chat-sel .it .ck{color:#39d98a;font-size:11px;text-align:center}
   .dr-chat-sel .it .rn,.dr-chat-sel .it .cl{width:20px;height:20px;display:grid;place-items:center;border:0;border-radius:5px;background:transparent;color:var(--dr-fg3b);font-size:12px;line-height:1;padding:0;cursor:pointer;opacity:0}
@@ -1782,7 +1785,7 @@
   const leftMs = (c) => (IDLE_MS && c && c.state === 'idle' && c.lastAt ? Date.parse(c.lastAt) + IDLE_MS - Date.now() : NaN);
   const leftTxt = (ms) => (!isFinite(ms) ? '' : ms <= 0 ? 'now' : ms < 60_000 ? Math.ceil(ms / 1000) + 's' : Math.ceil(ms / 60_000) + 'm');
   const CD_TIP = 'Closes itself when this runs out' + (BRAND.recapOnIdle === false ? '' : ' — it is asked for a recap first') + '; any message resets it';
-  const convoHtml = (c) => { const p = convoParts(c), nm = chatUi.names && chatUi.names[c.id]; return `<span class="lb"${nm ? ` title="${esc(p.lb)}"` : ''}>${esc(nm || p.lb)} &middot; ${esc(p.pins)}</span><span class="st ${esc(p.st)}"${c.state === 'idle' ? ` title="${esc(CD_TIP)}"` : ''}>${esc(p.st)}<span class="cd" data-cd="${esc(c.id)}">${esc(leftTxt(leftMs(c)))}</span></span>`; };
+  const convoHtml = (c) => { const p = convoParts(c), nm = chatUi.names && chatUi.names[c.id]; return `<span class="lb"${nm ? ` title="${esc(p.lb)}"` : ''}>${esc(nm || p.lb)} &middot; ${esc(p.pins)}</span><span class="st ${esc(p.st)}"${c.state === 'idle' ? ` title="${esc(CD_TIP)}"` : ''}>${esc(p.st)}</span><span class="cd" data-cd="${esc(c.id)}">${esc(leftTxt(leftMs(c)))}</span>`; };
   let cdTimer = null;
   const CLOSE_TIP = 'Close this conversation: ends its worker if running and removes it from this list (the transcript stays on disk)';
   const newConvoHtml = () => `<span class="lb">${chatConvos.length ? 'New conversation&#8230;' : 'No worker yet &#8212; type below to start one'}</span>`;
