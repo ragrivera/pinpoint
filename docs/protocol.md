@@ -131,7 +131,8 @@ from `~/.claude/sessions/<pid>.json` (or `PINPOINT_SESSION`), re-read live so `/
 -n pin-<id> --session-id <uuid> [--strict-mcp-config --mcp-config .docs/pinpoint/workers/mcp.json]`, cwd =
 root, env `PINPOINT_ROOT`, `PINPOINT_SESSION_ID=<workerId>`, `PINPOINT_SESSION=worker:<id>`. The first
 message is the batch brief (page, viewport, note, pins, the workflow: resolve → `report_pin` → fix →
-verify → numbered reply); when the page is a mockup this server serves (`/.docs/open-design/**`) the brief
+verify → numbered reply, then step 8: use a listed tool, and when an interactive-only tool such as Artifact is
+missing, build what needs none and hand off in one line with `cd <root> && claude --resume <uuid>`); when the page is a mockup this server serves (`/.docs/open-design/**`) the brief
 switches to artifact rules: edit the authoring source inside that folder, rebuild, never touch app code. Follow-ups are `{"type":"user","message":{"role":"user","content":…}}` lines on
 stdin; image blocks travel inline. After `worker.idleMinutes` the worker is asked for a one-line recap
 (`recap: …`, rendered as its own block in the drawer) and stdin is closed once that turn lands, or after a

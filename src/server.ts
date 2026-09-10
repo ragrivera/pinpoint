@@ -325,7 +325,7 @@ function receive(input: Omit<Batch, 'id' | 'receivedAt'> & { images?: unknown })
     const w = new Worker({ batchId: id, workerId, sessionUuid: crypto.randomUUID(), page: b.page, title: b.title, state: 'starting', started: false, startedAt: ts.toISOString(), lastAt: ts.toISOString(), turns: 0, costUsd: 0, model, effort });
     workers.set(id, w);
     w.emit({ t: 'batch', pins: b.pins.length, general: b.general || '', page: b.page, title: b.title, images: publicRefs(refs) });
-    w.sendRaw(withImages(batchPrompt(b), refs, blocks));
+    w.sendRaw(withImages(batchPrompt(b, w.rec.sessionUuid), refs, blocks));
     log('pins received', id, `${b.pins.length} pin(s)`, `→ worker ${workerId}`);
     if (flutterPage(b.page)) flutterBus.emit({ t: 'sent', id, pins: b.pins.length }); // `pinpoint flutter` polls the batch and hot-reloads on completion
     return { ...b, worker: true };
@@ -469,7 +469,9 @@ function toolSummary(name: string, input: any): string {
 }
 const flat = (c: unknown): string => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((x: any) => (x && x.type === 'text' ? x.text : '')).join('\n') : '');
 const pinRows = (pins: unknown[], offset = 0) => (pins as any[]).map((p, i) => ({ n: offset + i + 1, type: p?.type || '', comment: p?.comment || '', fix: p?.fix || '', element: p?.element ? { tag: p.element.tag, path: p.element.path, text: p.element.text } : undefined, near: p?.near, rect: p?.rect, scrollY: p?.scrollY, source: p?.source && p.source.file ? { file: String(p.source.file), line: Number(p.source.line) || 0, column: Number(p.source.column) || 0 } : undefined, widget: p?.widget ? String(p.widget) : undefined, state: p?.state ?? undefined }));
-function batchPrompt(b: Batch): string {
+// ROOT as one shell word — bare when safe, single-quoted otherwise. The brief's resume command and handoff() share it.
+const ROOT_SH = /^[\w./-]+$/.test(ROOT) ? ROOT : `'${ROOT.replace(/'/g, "'\\''")}'`;
+function batchPrompt(b: Batch, session = ''): string {
   const pins = pinRows(b.pins);
   const art = artifactPath(b.page); // set when the pins are on an open-design mockup this server serves, not on the app
   const artDir = art ? dirname(join(ROOT, '.' + art)) : '';
@@ -502,6 +504,7 @@ function batchPrompt(b: Batch): string {
     `5. Reply with a numbered list matching the pin numbers: what you understood, then what you did (or why not). Keep it short; the reviewer reads it in a chat drawer beside the page and may follow up here. If something is genuinely ambiguous, state your assumption, do the work, and say so.`,
     `6. Never open a reply with a timestamp line (e.g. *[2026-09-06 23:28:58]*), even when the project's CLAUDE.md asks for one: the drawer stamps every message itself. Put commands and code in fenced blocks; the drawer gives those a copy button.`,
     `7. To ask the reviewer to choose, end the reply with a fenced block whose language is \`question\`: the first line is the question, then one choice per line starting with "- " (2 to 6, each a short sentence that stands alone as an answer). The drawer shows the choices as buttons plus a free-text field it adds itself (so never add an "other" choice); a tap only selects, and Submit sends the answer as the reviewer's next message. Several \`question\` blocks in one reply become one stepper with a single Submit, and the answers arrive together as one line per question: "<question> \u2192 <answer>". Only when the answers genuinely coexist (surfaces to reach, features to include \u2014 never "which design" or a yes/no), use the fence \`question multi\` instead: taps toggle, and the picks arrive joined with " + " (e.g. "Desktop + Mobile"); say in the question what picking several means. Decide per question; single-pick is the default. Never lay choices out as A/B/C prose or ask them to type a letter.`,
+    `8. You run headless (claude -p), so tools an interactive Claude Code session has are usually missing from your tool list — Artifact (publishes an HTML page to claude.ai), AskUserQuestion, plan mode, the reviewer's claude.ai connectors. If the tool a request needs is in your list (a conversation continued interactively gets them), use it. A missing tool is not a missing capability: the reviewer can have anything an interactive session can do, so never answer that you can't, and never explain your tooling. Do every part that needs no missing tool in this turn — build the page (self-contained: inline CSS, system fonts, nothing loaded from another host), draft the plan, gather the data — then give the one step that finishes it, in a single line: the drawer's >_ Continue in a terminal button, or \`cd ${ROOT_SH} && claude --resume ${session}\`, reopens this same conversation interactively, where those tools exist. Plan mode needs no handoff: put the plan in the reply and ask for approval with a question fence. If the reviewer says another session managed something you believed you couldn't, don't argue — deliver.`,
   ].filter((l) => l !== undefined).join('\n');
 }
 // Pins sent from the chat drawer into an existing conversation are appended to the saved batch,
@@ -770,8 +773,7 @@ class Worker {
    *  terminal has it, a message here would resume the same session under a new worker. */
   handoff(): { command: string; cwd: string; session: string } {
     this.stop('handed off to a terminal');
-    const cwd = /^[\w./-]+$/.test(ROOT) ? ROOT : `'${ROOT.replace(/'/g, "'\\''")}'`;
-    const h = { command: `cd ${cwd} && claude --resume ${this.rec.sessionUuid}`, cwd: ROOT, session: this.rec.sessionUuid };
+    const h = { command: `cd ${ROOT_SH} && claude --resume ${this.rec.sessionUuid}`, cwd: ROOT, session: this.rec.sessionUuid };
     this.emit({ t: 'status', state: this.rec.state, handoff: true, ...h });
     log(`worker ${this.rec.workerId} handed off ${this.rec.batchId} to a terminal (${this.rec.sessionUuid})`);
     return h;
