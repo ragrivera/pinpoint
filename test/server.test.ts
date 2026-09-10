@@ -54,6 +54,7 @@ describe('HTTP owner', () => {
     expect(js.startsWith('window.__reviewBrand = {')).toBe(true);
     const brand = JSON.parse(js.slice('window.__reviewBrand = '.length, js.indexOf('\n')).replace(/;$/, ''));
     expect(brand).toMatchObject({ name: 'Pinpoint', key: 'pinpoint', api: '/api/pins', chat: '/api/chat', dispatch: 'session', port, requiredSession: 'pinpoint_acme' });
+    expect(brand).toMatchObject({ idleMinutes: 30, recapOnIdle: true }); // the drawer counts down to the idle close with these
     expect(js).toContain('dr-fp'); // the overlay body follows
   });
   test('serves an open-design mockup with the overlay injected, and nothing outside that tree', async () => {

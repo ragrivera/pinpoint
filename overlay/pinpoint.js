@@ -1226,6 +1226,7 @@
   .dr-chat-sel .lb{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .dr-chat-sel .st{flex:none;font:600 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--dr-fg3b)}
   .dr-chat-sel .st.working,.dr-chat-sel .st.starting{color:#ffb457}.dr-chat-sel .st.idle{color:#39d98a}.dr-chat-sel .st.error{color:#ff8a8e}
+  .dr-chat-sel .cd{margin-left:5px;color:var(--dr-fg3);text-transform:none;letter-spacing:.06em}
   .dr-chat-sel .chev{flex:none;display:inline-block;width:5px;height:5px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-2px) rotate(45deg);color:var(--dr-fg3);transition:transform .22s cubic-bezier(.22,.61,.36,1)}
   .dr-chat-sel.open .chev{transform:translateY(1px) rotate(225deg)}
   .dr-chat-sel .menu{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:2;max-height:280px;overflow-y:auto;background:rgba(var(--dr-g),.97);border:1px solid rgba(var(--dr-w),.12);border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,.4);padding:4px;scrollbar-width:thin;scrollbar-color:rgba(var(--dr-w),.18) transparent}
@@ -1774,7 +1775,15 @@
     if (chatTermBtn) chatTermBtn.style.display = state ? '' : 'none';
   }
   const convoParts = (c) => { let path = c.page; try { path = new URL(c.page).pathname; } catch (e) {} const t = new Date(c.startedAt || c.lastAt); const hh = isNaN(t) ? '' : t.toTimeString().slice(0, 5); return { lb: `${hh} ${path}`, pins: c.pins ? c.pins + ' pin' + (c.pins === 1 ? '' : 's') : 'note', st: String(c.state || '') }; };
-  const convoHtml = (c) => { const p = convoParts(c), nm = chatUi.names && chatUi.names[c.id]; return `<span class="lb"${nm ? ` title="${esc(p.lb)}"` : ''}>${esc(nm || p.lb)} &middot; ${esc(p.pins)}</span><span class="st ${esc(p.st)}">${esc(p.st)}</span>`; };
+  // How long an idle conversation has before the server closes it (worker.idleMinutes). The countdown
+  // is the client's own arithmetic off the row's lastAt, so it ticks without polling; it is an estimate,
+  // since the worker is asked for a recap first and that turn takes its own time.
+  const IDLE_MS = Math.max(0, Number(BRAND.idleMinutes) || 0) * 60_000;
+  const leftMs = (c) => (IDLE_MS && c && c.state === 'idle' && c.lastAt ? Date.parse(c.lastAt) + IDLE_MS - Date.now() : NaN);
+  const leftTxt = (ms) => (!isFinite(ms) ? '' : ms <= 0 ? 'now' : ms < 60_000 ? Math.ceil(ms / 1000) + 's' : Math.ceil(ms / 60_000) + 'm');
+  const CD_TIP = 'Closes itself when this runs out' + (BRAND.recapOnIdle === false ? '' : ' — it is asked for a recap first') + '; any message resets it';
+  const convoHtml = (c) => { const p = convoParts(c), nm = chatUi.names && chatUi.names[c.id]; return `<span class="lb"${nm ? ` title="${esc(p.lb)}"` : ''}>${esc(nm || p.lb)} &middot; ${esc(p.pins)}</span><span class="st ${esc(p.st)}"${c.state === 'idle' ? ` title="${esc(CD_TIP)}"` : ''}>${esc(p.st)}<span class="cd" data-cd="${esc(c.id)}">${esc(leftTxt(leftMs(c)))}</span></span>`; };
+  let cdTimer = null;
   const CLOSE_TIP = 'Close this conversation: ends its worker if running and removes it from this list (the transcript stays on disk)';
   const newConvoHtml = () => `<span class="lb">${chatConvos.length ? 'New conversation&#8230;' : 'No worker yet &#8212; type below to start one'}</span>`;
   function fillConvos() {
@@ -1787,9 +1796,15 @@
     }
     selSync();
   }
+  // The rows are only rebuilt when a conversation changes state, so the countdown is ticked in place.
+  function cdSync() {
+    if (!chatSel || !chatOpen) return; // a closed drawer has nothing to tick
+    chatSel.querySelectorAll('.cd').forEach((s) => { s.textContent = leftTxt(leftMs(chatConvos.find((c) => c.id === s.dataset.cd))); });
+  }
   // Mirror the current conversation onto the trigger and the menu's check mark.
   function selSync() {
     if (!chatSel) return;
+    if (!cdTimer) cdTimer = setInterval(cdSync, 10_000);
     const cur = chatUi.cur ? chatConvos.find((c) => c.id === chatUi.cur) : null;
     chatSel._tg.innerHTML = (cur ? convoHtml(cur) : newConvoHtml()) + '<i class="chev"></i>';
     chatSel._menu.querySelectorAll('.it').forEach((it) => { const on = (it.dataset.id || '') === (cur ? cur.id : ''); it.setAttribute('aria-selected', String(on)); it.querySelector('.ck').innerHTML = on ? '&#10003;' : ''; });
