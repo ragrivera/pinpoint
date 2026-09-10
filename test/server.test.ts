@@ -448,3 +448,56 @@ describe('worker.artifacts: false', () => {
     expect(v).toBe('0');
   }, 20000);
 });
+
+// The update check runs on every worker spawn, not at most every 4 hours: a tag pushed after the server started
+// is seen by the next spawn.
+describe('update check on every worker spawn', () => {
+  const ORIGIN = 'http://upd.localhost:5173';
+  let port: number;
+  let project: ReturnType<typeof tmpProject>;
+  let tags: ReturnType<typeof tmpProject>; // the fake package repo
+  let owner: ReturnType<typeof Bun.spawn>;
+  let base: string;
+  const git = (...a: string[]) => { const r = Bun.spawnSync(['git', '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...a], { cwd: tags.root }); if (r.exitCode !== 0) throw new Error(r.stderr.toString()); };
+  const latest = async () => (await (await fetch(base + '/api/health')).json()).update?.latest;
+
+  beforeAll(async () => {
+    port = await freePort();
+    project = tmpProject({
+      'fake-claude.sh': [
+        '#!/bin/sh',
+        'echo \'{"type":"system","subtype":"init","model":"stub"}\'',
+        'while IFS= read -r line; do',
+        '  echo \'{"type":"result","subtype":"success","is_error":false,"duration_ms":1,"num_turns":1,"total_cost_usd":0}\'',
+        'done',
+      ].join('\n') + '\n',
+    });
+    writeFileSync(join(project.root, '.pinpoint.json'), JSON.stringify({ port, name: 'upd', dispatch: 'worker', claudeBin: join(project.root, 'fake-claude.sh'), apps: [{ dir: '.', origin: ORIGIN }] }));
+    Bun.spawnSync(['chmod', '+x', join(project.root, 'fake-claude.sh')]);
+    tags = tmpProject({ 'README.md': 'pinpoint' });
+    git('init', '-q'); git('add', '-A'); git('commit', '-q', '-m', 'init'); git('tag', 'v50.0.0');
+    base = `http://127.0.0.1:${port}`;
+    owner = Bun.spawn(['bun', BIN, 'serve'], { cwd: project.root, env: cleanEnv({ PINPOINT_ROOT: project.root, PINPOINT_ROLE: 'http', PINPOINT_DETACHED: '1', PINPOINT_UPDATE_REPO: tags.root }), stdout: 'ignore', stderr: 'pipe' });
+    await waitFor(async () => (await fetch(base + '/api/health')).ok, 15000);
+  }, 20000);
+  afterAll(() => { try { owner.kill(); } catch {} project.rm(); tags.rm(); });
+
+  const post = (path: string, body: unknown) => fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: ORIGIN }, body: JSON.stringify(body) });
+  const state = async (id: string) => (await (await fetch(base + '/api/chat')).json()).find((c: any) => c.id === id)?.state;
+
+  test('a tag pushed after start is picked up by the next spawn, and by the next resume', async () => {
+    await waitFor(async () => (await latest()) === '50.0.0', 10000); // the check on start
+    git('tag', 'v51.0.0');
+    const r = await post('/api/pins', { page: `${ORIGIN}/home`, title: 'Home', general: 'look at this', pins: [], to: 'worker' });
+    expect(r.status).toBe(200);
+    const id = (await r.json()).id as string;
+    await waitFor(async () => (await latest()) === '51.0.0', 10000);
+    // a model switch ends the quiet process; the next message resumes the same conversation in a new one
+    await waitFor(async () => (await state(id)) === 'idle', 10000);
+    git('tag', 'v52.0.0');
+    expect((await post(`/api/chat/${id}/model`, { model: 'haiku' })).status).toBe(200);
+    await waitFor(async () => ['exited', 'error'].includes(await state(id)), 10000);
+    expect((await post(`/api/chat/${id}`, { text: 'again' })).status).toBe(200);
+    await waitFor(async () => (await latest()) === '52.0.0', 10000);
+  }, 45000);
+});
