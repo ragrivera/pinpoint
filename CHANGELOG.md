@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.7.0] - 2026-09-10
 
 ### Features
 - ✨ Update from the drawer. The `pinpoint X.Y.Z · update` pill starts a headless UPDATE worker
