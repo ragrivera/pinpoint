@@ -178,7 +178,7 @@ async function checkUpdate(): Promise<UpdateInfo | null> {
   const out = await new Response(proc.stdout).text().catch(() => '');
   clearTimeout(timer);
   if ((await proc.exited) !== 0) return null;
-  const tags = out.split('\n').map((l) => l.split('refs/tags/')[1] || '').filter((t) => semver(t));
+  const tags = out.split('\n').map((l) => l.split('refs/tags/')[1] || '').filter((t) => /^v?\d+\.\d+\.\d+$/.test(t)); // exactly vX.Y.Z: git allows ; | $ in tag names, and the tag reaches the update worker's brief as a command to run
   if (!tags.length) return null;
   const latest = tags.sort(semverCmp).pop()!.replace(/^v/, '');
   const spec = gh ? `github:${gh[1]}#v${latest}` : `${pkg.name}@${latest}`;

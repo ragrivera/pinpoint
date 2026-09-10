@@ -545,6 +545,7 @@ describe('update worker + self-restart', () => {
     Bun.spawnSync(['chmod', '+x', join(project.root, 'fake-claude.sh')]);
     tags = tmpProject({ 'README.md': 'pinpoint' });
     git('init', '-q'); git('add', '-A'); git('commit', '-q', '-m', 'init'); git('tag', 'v77.0.0');
+    git('tag', 'v99.0.0;x'); // a valid git tag carrying a shell metachar: the check must skip it, since the tag lands in the update worker's command
     base = `http://127.0.0.1:${port}`;
     owner = Bun.spawn(['bun', BIN, 'serve'], { cwd: project.root, env: cleanEnv({ PINPOINT_ROOT: project.root, PINPOINT_ROLE: 'http', PINPOINT_DETACHED: '1', PINPOINT_UPDATE_REPO: tags.root }), stdout: 'ignore', stderr: 'pipe' });
     await waitFor(async () => (await fetch(base + '/api/health')).ok, 15000);
