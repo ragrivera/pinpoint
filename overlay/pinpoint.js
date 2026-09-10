@@ -1512,11 +1512,13 @@
   };
   const stepperHtml = (qs) => {
     const n = qs.length;
-    const steps = qs.map((x, i) => `<div class="qstep${i === 0 ? ' on' : ''}" data-i="${i}" data-q="${esc(x.q)}"${x.multi ? ' data-multi="1"' : ''}>${x.q || x.multi ? '<div class="qq">' + inline(x.q) + (x.multi ? '<span class="qhint">pick any</span>' : '') + '</div>' : ''}<div class="qo">${x.o.map((c) => '<button type="button" class="qb' + (c.rec ? ' rec' : '') + '" data-a="' + esc(c.c) + '">' + (c.rec ? '<span class="qrec">Recommended</span>' : '') + inline(c.c) + '</button>').join('')}</div><form class="qf"><input class="qi" type="text" placeholder="Type your own, or add a note\u2026" autocomplete="off" spellcheck="false"></form></div>`).join('');
+    const steps = qs.map((x, i) => `<div class="qstep${i === 0 ? ' on' : ''}" data-i="${i}" data-q="${esc(x.q)}"${x.multi ? ' data-multi="1"' : ''}>${x.q || x.multi ? '<div class="qq">' + inline(x.q) + (x.multi ? '<span class="qhint">pick any</span>' : '') + '</div>' : ''}<div class="qo">${x.o.map((c) => '<button type="button" class="qb' + (c.rec ? ' rec' : '') + '" data-a="' + esc(c.c) + '">' + (c.rec ? '<span class="qrec">Recommended</span>' : '') + inline(c.c) + '</button>').join('')}</div><form class="qf"><input class="qi" type="text" placeholder="Type your own instead\u2026" autocomplete="off" spellcheck="false"></form></div>`).join('');
     const nav = n > 1 ? `<div class="qnav"><span class="qpos">1 of ${n}</span></div>` : '';
     const act = `<div class="qact">${n > 1 ? '<button type="button" class="qback" style="visibility:hidden">Back</button>' : ''}<span class="sp"></span>${n > 1 ? '<button type="button" class="qnext">Next</button>' : ''}<button type="button" class="qsub"${n > 1 ? ' style="display:none"' : ''}>Submit</button></div>`;
     return `<div class="qa" data-n="${n}">${nav}${steps}${act}</div>`;
   };
+  const stepClearTyped = (st) => { const inp = st.querySelector('.qi'); if (inp && inp.value) { inp.value = ''; const f = st.querySelector('.qf'); if (f) f.classList.remove('on'); } };
+  const stepClearPicks = (st) => st.querySelectorAll('.qb.on').forEach((b) => b.classList.remove('on'));
   const stepAnswer = (st) => { const on = [...st.querySelectorAll('.qb.on')].map((b) => b.dataset.a || b.textContent.trim()), inp = st.querySelector('.qi'); return { choice: st.dataset.multi ? on.join(MULTI_SEP) : on[0] || '', typed: inp ? inp.value.trim() : '' }; };
   function stepSync(qa) {
     const steps = [...qa.querySelectorAll('.qstep')], cur = steps.findIndex((x) => x.classList.contains('on')), last = cur === steps.length - 1;
@@ -1680,11 +1682,21 @@
     chatEl.addEventListener('dragover', (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
     chatEl.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; chatEl.classList.remove('drop'); } });
     chatEl.addEventListener('drop', (e) => { e.preventDefault(); dragDepth = 0; chatEl.classList.remove('drop'); if (e.dataTransfer) [...e.dataTransfer.files].forEach(addFile); });
+    // Typing is the other half of "last one wins": the moment the field has anything in it, the
+    // picked choice lets go, so what gets sent is only ever what was answered last.
+    chatLs.addEventListener('input', (e) => {
+      const inp = e.target instanceof Element ? e.target.closest('.qi') : null; if (!inp) return;
+      const st = inp.closest('.qstep'); if (!st || inp.closest('.qa.answered')) return;
+      if (inp.value.trim()) stepClearPicks(st);
+    });
     chatLs.addEventListener('click', (e) => {
       const t = e.target; if (t instanceof HTMLImageElement && t.closest('.imgs')) return openLightbox(t.src, t.alt, t.getBoundingClientRect());
       const cp = t instanceof Element ? t.closest('.cp') : null; if (cp) { const pre = cp.parentElement && cp.parentElement.querySelector('pre'); copyText(pre ? pre.textContent : '', cp); return; }
       const qb = t instanceof Element ? t.closest('.qb') : null;
-      if (qb) { const qa = qb.closest('.qa'), st = qb.closest('.qstep'); if (qa && st && !qa.classList.contains('answered')) { if (st.dataset.multi) qb.classList.toggle('on'); else { const was = qb.classList.contains('on'); st.querySelectorAll('.qb').forEach((b) => b.classList.remove('on')); if (!was) qb.classList.add('on'); } } return; }
+      // The choices and the text field are two ways to answer the SAME question, so the last one
+      // used wins: tapping clears what was typed, and typing (below) clears the tap. Sending both
+      // read as picking the option with a note attached — never what was meant.
+      if (qb) { const qa = qb.closest('.qa'), st = qb.closest('.qstep'); if (qa && st && !qa.classList.contains('answered')) { if (st.dataset.multi) qb.classList.toggle('on'); else { const was = qb.classList.contains('on'); st.querySelectorAll('.qb').forEach((b) => b.classList.remove('on')); if (!was) qb.classList.add('on'); } stepClearTyped(st); } return; }
       const nb = t instanceof Element ? t.closest('.qback, .qnext, .qsub') : null;
       if (nb) { const qa = nb.closest('.qa'); if (!qa || qa.classList.contains('answered')) return; if (nb.classList.contains('qback')) stepGo(qa, -1); else if (nb.classList.contains('qnext')) stepGo(qa, 1); else chatAnswer(qa); }
     });
