@@ -59,7 +59,7 @@ import { findProject as findProjectFile } from './config.js';
 import pkg from '../package.json';
 
 type ModelOpt = { id: string; label: string; note?: string };
-type WorkerCfg = { idleMinutes?: number; mcp?: 'pinpoint' | 'all'; args?: string[]; model?: string; models?: Array<string | Partial<ModelOpt>>; effort?: string; recapOnIdle?: boolean };
+type WorkerCfg = { artifacts?: boolean; idleMinutes?: number; mcp?: 'pinpoint' | 'all'; args?: string[]; model?: string; models?: Array<string | Partial<ModelOpt>>; effort?: string; recapOnIdle?: boolean };
 type Project = { root: string; port?: number; name?: string; file?: string; dispatch?: 'worker' | 'session'; claudeBin?: string; worker?: WorkerCfg; origins: string[]; updateCheck?: boolean };
 function findProject(from: string): Project {
   const { root, file, config: j } = findProjectFile(from);
@@ -101,6 +101,9 @@ const RECAP_PROMPT = [
 ].join('\n');
 const WORKER_MCP: 'pinpoint' | 'all' = PROJECT.worker?.mcp === 'all' ? 'all' : 'pinpoint';
 const WORKER_ARGS: string[] = Array.isArray(PROJECT.worker?.args) ? PROJECT.worker!.args!.map(String) : [];
+// claude -p leaves the Artifact tool off unless CLAUDE_CODE_ARTIFACT is on. Workers get it, so an "artifact" request is
+// published by the worker and answered with the link, not handed back as a step. worker.artifacts: false turns it off.
+const WORKER_ARTIFACTS = PROJECT.worker?.artifacts !== false;
 // Which Claude a worker runs (`--model <id>`; the empty id means the claude binary's own
 // default). Aliases rather than dated ids, so the list does not rot; a project can replace it
 // with worker.models in .pinpoint.json and preselect one with worker.model. The overlay's model
@@ -504,7 +507,7 @@ function batchPrompt(b: Batch, session = ''): string {
     `5. Reply with a numbered list matching the pin numbers: what you understood, then what you did (or why not). Keep it short; the reviewer reads it in a chat drawer beside the page and may follow up here. If something is genuinely ambiguous, state your assumption, do the work, and say so.`,
     `6. Never open a reply with a timestamp line (e.g. *[2026-09-06 23:28:58]*), even when the project's CLAUDE.md asks for one: the drawer stamps every message itself. Put commands and code in fenced blocks; the drawer gives those a copy button.`,
     `7. To ask the reviewer to choose, end the reply with a fenced block whose language is \`question\`: the first line is the question, then one choice per line starting with "- " (2 to 6, each a short sentence that stands alone as an answer). The drawer shows the choices as buttons plus a free-text field it adds itself (so never add an "other" choice); a tap only selects, and Submit sends the answer as the reviewer's next message. Several \`question\` blocks in one reply become one stepper with a single Submit, and the answers arrive together as one line per question: "<question> \u2192 <answer>". Only when the answers genuinely coexist (surfaces to reach, features to include \u2014 never "which design" or a yes/no), use the fence \`question multi\` instead: taps toggle, and the picks arrive joined with " + " (e.g. "Desktop + Mobile"); say in the question what picking several means. Decide per question; single-pick is the default. Never lay choices out as A/B/C prose or ask them to type a letter.`,
-    `8. You run headless (claude -p), so tools an interactive Claude Code session has are usually missing from your tool list — Artifact (publishes an HTML page to claude.ai), AskUserQuestion, plan mode, the reviewer's claude.ai connectors. If the tool a request needs is in your list (a conversation continued interactively gets them), use it. A missing tool is not a missing capability: the reviewer can have anything an interactive session can do, so never answer that you can't, and never explain your tooling. Do every part that needs no missing tool in this turn — build the page (self-contained: inline CSS, system fonts, nothing loaded from another host), draft the plan, gather the data — then give the one step that finishes it, in a single line: the drawer's >_ Continue in a terminal button, or \`cd ${ROOT_SH} && claude --resume ${session}\`, reopens this same conversation interactively, where those tools exist. Plan mode needs no handoff: put the plan in the reply and ask for approval with a question fence. If the reviewer says another session managed something you believed you couldn't, don't argue — deliver.`,
+    `8. An "artifact" is a page published with the Artifact tool, which pinpoint turns on for workers (CLAUDE_CODE_ARTIFACT=1): build the page self-contained (inline CSS, system fonts, nothing loaded from another host), publish it, and reply with the link it returns — the reviewer never does that step. Other tools an interactive Claude Code session has can still be missing from your list: AskUserQuestion, plan mode, the reviewer's claude.ai connectors. A missing tool is not a missing capability: never answer that you can't, and never explain your tooling. Plan mode needs no tool — put the plan in the reply and ask for approval with a question fence. Only when a request needs a tool that is not in your list (Artifact included, when a project turns it off) do every part that needs no missing tool, then give the finishing step in a single line: the drawer's >_ Continue in a terminal button, or \`cd ${ROOT_SH} && claude --resume ${session}\`, reopens this same conversation interactively. If the reviewer says another session managed something you believed you couldn't, don't argue — deliver.`,
   ].filter((l) => l !== undefined).join('\n');
 }
 // Pins sent from the chat drawer into an existing conversation are appended to the saved batch,
@@ -644,7 +647,7 @@ class Worker {
     try {
       this.proc = Bun.spawn(args, {
         cwd: ROOT,
-        env: { ...process.env, PINPOINT_ROOT: ROOT, PINPOINT_SESSION_ID: this.rec.workerId, PINPOINT_SESSION: `worker:${this.rec.batchId}` },
+        env: { ...process.env, CLAUDE_CODE_ARTIFACT: WORKER_ARTIFACTS ? (process.env.CLAUDE_CODE_ARTIFACT || '1') : '0', PINPOINT_ROOT: ROOT, PINPOINT_SESSION_ID: this.rec.workerId, PINPOINT_SESSION: `worker:${this.rec.batchId}` },
         stdin: 'pipe', stdout: 'pipe', stderr: 'pipe',
       });
     } catch (e) { this.proc = null; this.setState('error', { text: `spawn failed: ${String((e as any)?.message || e)}` }); return; }
