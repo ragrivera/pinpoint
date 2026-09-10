@@ -114,7 +114,7 @@ anything outside the list — a typo would otherwise surface only as a worker th
 `<root>/.docs/open-design`) with the overlay injected, so pins on a mockup ride the same worker + chat loop;
 the worker brief then edits the artifact's authoring source, never app code. Nothing else is served statically.
 
-**Updates.** Every 4 hours at most — on server start and whenever a worker spawns — the server runs `git ls-remote --tags`
+**Updates.** On server start, every 4 hours after that, and whenever a worker spawns or resumes, the server runs `git ls-remote --tags`
 on this package's repo (your own git credentials, so a private repo works) and compares the highest `vX.Y.Z` tag
 with the installed version. A newer one shows as a `vX.Y.Z available` chip in the chat drawer's header (click
 copies the `bun add` command) and as `update` on `/api/health`. It never delays a spawn; `"updateCheck": false`
@@ -169,7 +169,7 @@ PINPOINT_DETACHED=1 PINPOINT_ROLE=http nohup bun run pinpoint serve > .docs/pinp
     "effort": "",               // preselects the effort pill: low | medium | high | xhigh | max ("" = whatever claude does)
     "models": []                // replaces the offered list: ["opus", { "id": "fable", "label": "Fable", "note": "most capable" }]
   },
-  "updateCheck": true           // optional; false stops the 4-hourly look at the package repo's tags for a newer pinpoint
+  "updateCheck": true           // optional; false stops looking at the package repo's tags for a newer pinpoint
 }
 ```
 

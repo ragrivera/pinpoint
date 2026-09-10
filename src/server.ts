@@ -156,8 +156,8 @@ const WORKER_MCP_CFG = join(WORKERS_DIR, 'mcp.json');
 const BRAND = { name: 'Pinpoint', key: 'pinpoint', api: '/api/pins', sessions: '/api/sessions', chat: '/api/chat', dispatch: DISPATCH, server: 'pinpoint', port: PORT, requiredSession: STRICT ? REQUIRED_SESSION : null, models: MODELS, model: DEFAULT_MODEL, efforts: EFFORTS, effort: DEFAULT_EFFORT, idleMinutes: WORKER_IDLE_MS / 60_000, recapOnIdle: RECAP_ON_IDLE };
 
 // ─── Update check ─────────────────────────────────────────────────────────────
-// So people notice a newer pinpoint: at most once every 4 hours — on owner start and whenever a worker
-// (re)starts — `git ls-remote --tags` the package repo (the user's own git credentials, so a private
+// So people notice a newer pinpoint: on owner start, every 4 hours after that, and whenever a worker spawns
+// or resumes — `git ls-remote --tags` the package repo (the user's own git credentials, so a private
 // repo works too) and compare the highest vX.Y.Z tag with this package's version. Never blocks a
 // spawn (background, 8s cap); the result rides on /api/health and the overlay prelude, where the
 // drawer shows a chip. Off with "updateCheck": false in .pinpoint.json or PINPOINT_NO_UPDATE_CHECK=1;
@@ -171,7 +171,7 @@ const UPDATE_REPO = process.env.PINPOINT_UPDATE_REPO || (gh ? `https://github.co
 const semver = (v: string) => { const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(v); return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null; };
 const semverCmp = (a: string, b: string) => { const x = semver(a), y = semver(b); if (!x || !y) return 0; for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
 let update: UpdateInfo | null = null;
-let updateCheckedAt = 0, updateRunning = false;
+let updateRunning = false; // one check at a time: a burst of spawns shares the one in flight
 async function checkUpdate(): Promise<UpdateInfo | null> {
   const proc = Bun.spawn(['git', 'ls-remote', '--tags', '--refs', UPDATE_REPO], { stdout: 'pipe', stderr: 'ignore', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
   const timer = setTimeout(() => { try { proc.kill(); } catch {} }, 8_000);
@@ -185,8 +185,8 @@ async function checkUpdate(): Promise<UpdateInfo | null> {
   return { current: pkg.version, latest, available: semverCmp(latest, pkg.version) > 0, checkedAt: new Date().toISOString(), repo: UPDATE_REPO, command: `bun add -D ${spec}` };
 }
 function maybeCheckUpdate() {
-  if (!UPDATE_CHECK || !UPDATE_REPO || updateRunning || Date.now() - updateCheckedAt < UPDATE_EVERY_MS) return;
-  updateRunning = true; updateCheckedAt = Date.now();
+  if (!UPDATE_CHECK || !UPDATE_REPO || updateRunning) return;
+  updateRunning = true;
   checkUpdate().then((u) => {
     if (u && (!update || update.latest !== u.latest)) log(u.available ? `update available: ${pkg.name} ${u.current} → ${u.latest}  (${u.command})` : `up to date: ${pkg.name} ${u.current}`);
     if (u) update = u;
@@ -634,7 +634,7 @@ class Worker {
   }
   start(resume: boolean) {
     if (this.proc) return;
-    maybeCheckUpdate(); // a spawn is when someone is looking; every 4 hours at most, never waits
+    maybeCheckUpdate(); // a spawn or resume is when someone is looking; never waits
     if (!existsSync(CLAUDE_BIN)) { this.setState('error', { text: `claude binary not found at ${CLAUDE_BIN} — set claudeBin in .pinpoint.json or PINPOINT_CLAUDE` }); return; }
     const args = [CLAUDE_BIN, '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '-n', `pin-${this.rec.batchId.slice(-24)}`];
     args.push(resume ? '--resume' : '--session-id', this.rec.sessionUuid);
@@ -962,6 +962,7 @@ if (httpOwner) {
   writeWorkerMcpCfg();
   loadWorkers();
   maybeCheckUpdate();
+  setInterval(maybeCheckUpdate, UPDATE_EVERY_MS).unref(); // and for a server left running with no workers
   if (DISPATCH === 'worker' && !existsSync(CLAUDE_BIN)) log(`WARNING: claude binary not found at ${CLAUDE_BIN}; worker dispatch will fail (set claudeBin in .pinpoint.json)`);
 }
 if (SELF) {

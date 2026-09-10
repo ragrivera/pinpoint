@@ -69,7 +69,7 @@ All `/api/*` routes check `Origin`: allowed are the origins in `.pinpoint.json` 
 |---|---|
 | `GET /pinpoint.js` | the overlay, prefixed with `window.__reviewBrand = {…}` (name, key, api paths, dispatch, port, requiredSession, models, model) |
 | `GET /.docs/open-design/**` | the project's open-design mockups (rooted at `<root>/.docs/open-design`); `.html` is served with the overlay `<script>` injected; the only static tree |
-| `GET /api/health` | `{ ok, root, port, project, name, dispatch, claudeBin, requiredSession, feedbackDir, model, models, sessions, handlers, workers, update }` — `update` is `null` until the 4-hourly tag check has run, then `{ current, latest, available, checkedAt, repo, command }` (also on the overlay prelude) |
+| `GET /api/health` | `{ ok, root, port, project, name, dispatch, claudeBin, requiredSession, feedbackDir, model, models, sessions, handlers, workers, update }` — `update` is `null` until the first tag check has run (on start, then every 4 hours and on every worker spawn or resume), then `{ current, latest, available, checkedAt, repo, command }` (also on the overlay prelude) |
 | `POST /api/pins` | receive a batch → `{ ok, id, worker }`; `400` when `model` is not one the server offers; `409` with `hint` when session dispatch has no handler; `503` when a follower is asked to spawn a worker |
 | `GET /api/pins/:id` | progress: `{ id, page, to, claimedBy, claimedLabel, worker, total, noteOnly, resolved, complete, progress }` |
 | `GET /api/sessions` | live sessions for the To: picker (handlers only on installed projects) |

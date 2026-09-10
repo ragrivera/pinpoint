@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- 🚸 The update check runs whenever a worker spawns or resumes, plus every 4 hours for a server left
+  running with no workers — it used to run at most once every 4 hours. Still on start, still in the
+  background with an 8s cap, and never two at once. The open drawer re-reads
+  `/api/health` with its 15s conversation poll, so a `vX.Y.Z available` chip shows up within one
+  poll of the spawn that found it, not on the next page load (server, overlay)
+
+### Tests
+- ✅ A tag pushed after the server started is reported after the next worker spawn, and a later one after the next resume (server)
+
 ## [0.6.0] - 2026-09-10
 
 ### Features
