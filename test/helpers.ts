@@ -9,7 +9,7 @@ export const BIN = join(import.meta.dir, '..', 'bin', 'pinpoint.ts');
  *  exports PINPOINT_ROOT, for instance), so a spawned server resolves the fixture, not the host repo. */
 export function cleanEnv(extra: Record<string, string> = {}): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !k.startsWith('PINPOINT')) env[k] = v;
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !k.startsWith('PINPOINT') && k !== 'CLAUDE_CODE_ARTIFACT') env[k] = v; // fixtures decide the Artifact switch, not the runner's session
   return { ...env, ...extra };
 }
 
