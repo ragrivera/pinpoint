@@ -1224,8 +1224,14 @@
   .dr-chat-hd{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 12px 12px 16px;border-bottom:1px solid rgba(var(--dr-w),.07);user-select:none}
   .dr-chat-hd b{font:600 11px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--dr-fg);display:flex;align-items:center;gap:8px}
   .dr-chat-hd b .sub{color:var(--dr-fg3b);font-weight:500}
-  .dr-chat-upd{margin-left:2px;padding:3px 7px;border-radius:999px;border:1px solid rgba(255,180,87,.45);background:rgba(255,180,87,.12);color:#ffb457;font:600 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.05em;text-transform:none;cursor:pointer;white-space:nowrap}
-  .dr-chat-upd:hover{background:rgba(255,180,87,.22)}
+  .dr-chat-updw{position:relative;z-index:2;height:0;display:flex;justify-content:center;pointer-events:none}
+  .dr-chat-upd{pointer-events:auto;position:absolute;top:12px;display:inline-flex;align-items:center;gap:2px;max-width:calc(100% - 24px);box-sizing:border-box;padding:3px 4px 3px 12px;border-radius:999px;border:1px solid rgba(255,180,87,.55);background:rgba(var(--dr-g),.97);color:var(--dr-fg);box-shadow:0 8px 24px rgba(0,0,0,.45);white-space:nowrap}
+  .dr-chat-upd:hover{border-color:rgba(255,180,87,.9)}
+  .dr-chat-updgo{display:inline-flex;align-items:center;gap:8px;min-width:0;margin:0;padding:3px 8px 5px 0;border:0;background:transparent;color:inherit;font:13px/1.4 system-ui,sans-serif;cursor:pointer}
+  .dr-chat-updgo i{font-style:normal;font-weight:700;color:#ffb457}
+  .dr-chat-updgo span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .dr-chat-updx{flex:none;width:20px;height:20px;display:grid;place-items:center;padding:0;border:1px solid rgba(var(--dr-w),.14);background:rgba(var(--dr-w),.06);border-radius:999px;color:var(--dr-fg3b);font:700 11px/1 ui-monospace,Menlo,monospace;cursor:pointer}
+  .dr-chat-updx:hover{background:rgba(var(--dr-w),.14);color:var(--dr-fg)}
   .dr-chat-hd .r{display:flex;align-items:center;gap:6px}
   .dr-chat-bar{display:flex;gap:6px;align-items:center;padding:8px 12px;border-bottom:1px solid rgba(var(--dr-w),.07)}
   .dr-chat-sel{flex:1;min-width:0;position:relative}
@@ -1361,7 +1367,8 @@
   .dr-chat-tools{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:3px 6px 7px}
   .dr-chat-ta{display:block;width:100%;box-sizing:border-box;resize:none;min-height:44px;max-height:50vh;height:72px;overflow-y:auto;background:transparent;border:0;border-radius:12px 12px 0 0;color:var(--dr-fg);padding:9px 11px 4px;font:13px/1.4 system-ui,sans-serif;cursor:text;scrollbar-width:thin;scrollbar-color:rgba(var(--dr-w),.18) transparent}
   .dr-chat-ta::-webkit-scrollbar{width:8px}.dr-chat-ta::-webkit-scrollbar-track{background:transparent}.dr-chat-ta::-webkit-scrollbar-thumb{background:rgba(var(--dr-w),.18);border-radius:4px}
-  .dr-chat-hint{padding:2px 14px 18px;font-size:11px;color:var(--dr-fg3b);line-height:1.6}
+  .dr-chat-hint{position:relative;padding:2px 14px 18px;font-size:11px;color:var(--dr-fg3b);line-height:1.6}
+  .dr-chat-ver{position:absolute;right:14px;top:7px;font:600 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--dr-fg3b);user-select:none} /* the version at the drawer's foot, on the shortcuts row so it costs no height */
   .dr-chat-tg{display:inline-flex;align-items:center;gap:6px;border:0;background:transparent;padding:2px 0;margin:0;color:var(--dr-fg3);font:600 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;cursor:pointer}
   .dr-chat-tg:hover{color:var(--dr-fg2)}
   .dr-chat-tg .chev{display:inline-block;width:5px;height:5px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-2px) rotate(45deg);transition:transform .22s cubic-bezier(.22,.61,.36,1)}
@@ -1496,6 +1503,8 @@
   // progress notes' quiet block — dim caps label, 2px rule — instead of running on inside the reply.
   const RECAP_RE = /^\s*(?:\u2733\s*)?(?:\*\*\s*recap\s*\*\*\s*:|\*\*\s*recap\s*:\s*\*\*|recap\s*:)\s*(.+)$/i;
   const BLOCK_RE = /^<(?:table|div class="rc")/;
+  // A ```recap block (its info line is the label: ```recap pinpoint 0.5.0 → 0.6.1) is drawn in the recap frame under
+  // that label — the update worker's what's-new arrives this way; the body is ordinary markdown-lite.
   // ```question blocks from a worker (first line(s) the question, each "- " line a choice). All the blocks of one
   // message form ONE stepper: a question at a time with Back / Next, a free-text field on every step, and a single
   // Submit at the end that sends every answer in one message (chatAnswer). A lone block is just its Submit.
@@ -1536,7 +1545,7 @@
   }
   const md = (v) => { const qs = []; const html = mdParts(v, qs); return html.replace(/(<br>)+$/, '') + (qs.length ? stepperHtml(qs) : ''); };
   const mdParts = (v, qs) => String(v == null ? '' : v).split(/```/).map((part, i) => {
-    if (i % 2) { const qm = /^question(?:[ \t]+(multi))?[ \t]*\r?\n([\s\S]*)$/.exec(part); if (qm) { const q = parseQuestion(qm[2], qm[1]); if (q) { qs.push(q); return ''; } return `<pre>${esc(qm[2])}</pre>`; } return `<div class="cb"><pre>${esc(part.replace(/^[a-z]*\n/, ''))}</pre><button class="cp" type="button" title="Copy to clipboard">copy</button></div>`; }
+    if (i % 2) { const rm = /^recap(?:[ \t]+([^\r\n]*))?[ \t]*\r?\n([\s\S]*)$/.exec(part); if (rm) return '<div class="rc"><span class="rl">' + esc((rm[1] || '').trim() || 'recap') + '</span>' + mdParts(rm[2].replace(/\n+$/, ''), qs) + '</div>'; const qm = /^question(?:[ \t]+(multi))?[ \t]*\r?\n([\s\S]*)$/.exec(part); if (qm) { const q = parseQuestion(qm[2], qm[1]); if (q) { qs.push(q); return ''; } return `<pre>${esc(qm[2])}</pre>`; } return `<div class="cb"><pre>${esc(part.replace(/^[a-z]*\n/, ''))}</pre><button class="cp" type="button" title="Copy to clipboard">copy</button></div>`; }
     const ls = part.split('\n'), out = [];
     for (let j = 0; j < ls.length; j++) {
       if (isRow(ls[j]) && /^\s*\|?(\s*:?-+:?\s*\|)+\s*(:?-+:?\s*)?\|?\s*$/.test(ls[j + 1] || '')) { // header | separator | rows
@@ -1559,8 +1568,25 @@
     chatEl.addEventListener('pointerleave', () => { chatHover = false; chatApply(); });
     const hd = el('div', 'dr-chat-hd');
     const ttl = el('b'); ttl.append(document.createTextNode(BRAND.name), el('span', 'sub', 'chat'));
-    const upd = el('button', 'dr-chat-upd'); upd.type = 'button'; upd.style.display = 'none'; ttl.append(upd); chatEl._upd = upd; // "vX.Y.Z available" — click copies the update command
-    upd.onclick = () => { if (!chatUpdate || !chatUpdate.command) return; clipWrite(chatUpdate.command).then((ok) => { upd.textContent = ok ? 'update command copied' : chatUpdate.command; setTimeout(updSync, 1600); }); };
+    const updw = el('div', 'dr-chat-updw'); updw.style.display = 'none'; chatEl._upd = updw; // "pinpoint X.Y.Z · update" pill floating over the top of the transcript (zero layout height): click starts the update worker (updGo), the x dismisses that version
+    const upd = el('div', 'dr-chat-upd'); const updGo = el('button', 'dr-chat-updgo'); updGo.type = 'button'; const updT = el('span'); updGo.append(Object.assign(el('i'), { textContent: '\u2191' }), updT); updw._go = updGo; updw._t = updT;
+    const updX = el('button', 'dr-chat-updx'); updX.type = 'button'; updX.title = 'Dismiss for this version'; updX.setAttribute('aria-label', 'Dismiss update notice'); updX.textContent = '\u00d7';
+    // Update = start the headless update worker (POST /api/update) and open its conversation; while one runs the pill
+    // names it and only opens it. A server from before the updater has no such route (404): copy the command instead.
+    updGo.onclick = async () => {
+      if (!chatUpdate) return;
+      if (chatUpdating) { openChat(chatUpdating); return; }
+      updT.textContent = 'starting the update\u2026';
+      try {
+        const r = await fetch(API + '/api/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ page: location.href, title: document.title, model: modelPref(), effort: effortPref() }) });
+        if (r.status === 404) { const ok = await clipWrite(chatUpdate.command || ''); updT.textContent = ok ? 'this server predates the updater \u2014 command copied, run it and restart the server' : chatUpdate.command; setTimeout(updSync, 5000); return; }
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error([j.error, j.hint].filter(Boolean).join(' \u2014 ') || 'HTTP ' + r.status);
+        chatUpdating = j.id; updSync(); await loadConvos(); openChat(j.id);
+      } catch (e) { updT.textContent = 'update failed \u2014 ' + (e && e.message ? e.message : e); setTimeout(updSync, 5000); }
+    };
+    updX.onclick = () => { if (chatUpdate) { try { localStorage.setItem(UPD_KEY, chatUpdate.latest); } catch (e) {} } updSync(); };
+    upd.append(updGo, updX); updw.append(upd);
     updSync();
     const r = el('div', 'r');
     const ann = el('button', 'dr-ann'); const d2 = el('i', 'dr-dot'); ann.append(d2, document.createTextNode('annotate')); ann.title = 'Toggle annotate mode (R)'; ann.onclick = toggle; chatEl._dot = d2; chatEl._ann = ann;
@@ -1708,7 +1734,8 @@
       const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); chatSave(); };
       window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
     });
-    chatEl.append(rz, hd, bar, chatLs, chatSt, stage, inp, hint); document.body.appendChild(chatEl); renderChatPins(); chatApply();
+    const ver = el('div', 'dr-chat-ver'); chatEl._ver = ver; hint.append(ver); verSync(); // the pinpoint version this drawer talks to, bottom right
+    chatEl.append(rz, hd, bar, updw, chatLs, chatSt, stage, inp, hint); document.body.appendChild(chatEl); renderChatPins(); chatApply();
   }
   // Full-screen preview of a transcript screenshot. Lives on document.body (outside the scaled drawer);
   // click anywhere or Esc closes it, the caption keeps an "open" link for the raw file.
@@ -1742,7 +1769,8 @@
     const at = ev.at ? new Date(ev.at) : null, hh = at && !isNaN(at) ? at.toTimeString().slice(0, 8) : '';
     const n = (cls, html) => { const d = el('div', 'm ' + cls); d.innerHTML = html; if (hh) d.dataset.at = hh; return d; };
     switch (ev.t) {
-      case 'batch': return n('user', md(ev.general || '') + pinsHtml(ev.pins ? { count: ev.pins, first: 1 } : null) + imgsHtml(ev.images)); // the note that started the worker reads like any later message
+      case 'batch': if (ev.update) return n('status handoff', '<span class="hi" aria-hidden="true">&uarr;</span><b>Updating pinpoint ' + esc(ev.update.from) + ' \u2192 ' + esc(ev.update.to) + '</b><span class="sub">A headless worker runs <code>' + esc(ev.update.command || '') + '</code>; when it is done the server restarts on the new version, and the recap below says what changed.</span>'); // an update conversation opens on what it is doing, not on a note
+        return n('user', md(ev.general || '') + pinsHtml(ev.pins ? { count: ev.pins, first: 1 } : null) + imgsHtml(ev.images)); // the note that started the worker reads like any later message
       case 'user': return n('user', md(ev.text) + pinsHtml(ev.pins) + imgsHtml(ev.images));
       case 'assistant': { const t = noStamp(ev.text); return t.trim() ? n('ai', md(t)) : null; }
       case 'tool': return n('tool', `<span class="tn">${esc(String(ev.name || '').replace(/^mcp__pinpoint__/, 'pinpoint:'))}</span>${ev.summary ? '(<span class="ts">' + esc(ev.summary) + '</span>)' : ''}`);
@@ -1755,6 +1783,8 @@
         if (ev.modelSet) return n('status', 'model \u2192 ' + esc(modelLabel(ev.model)) + ' — the worker restarts on it, resuming this session');
         if (ev.effortSet) return n('status', 'effort \u2192 ' + esc(effortLabel(ev.effort)) + ' — the worker restarts on it, resuming this session');
         // idle-recap, stopping and exited say nothing the header status line does not: they stay out of the transcript
+        if (ev.note) return n('status', esc(ev.text)); // a line the drawer itself adds (the restart came back, say)
+        if (ev.restarting) return n('status', 'restarting the pinpoint server on ' + esc(ev.to || '') + '\u2026 the drawer reconnects on its own');
         if (ev.state === 'starting') return n('status', ev.resume ? 'resuming the worker session…' : 'starting a worker…');
         if (ev.ready) return n('status', 'worker ready' + (ev.model ? ' · ' + esc(ev.model) : ''));
         if (ev.state === 'error') return n('status err', 'worker error' + (ev.text ? ' — ' + esc(ev.text) : ev.code != null ? ' (exit ' + ev.code + ')' : ''));
@@ -1822,13 +1852,13 @@
   }
   function chatStatus(state, ev) {
     if (!chatSt) return;
-    const map = { connecting: 'connecting…', starting: ev && ev.resume ? 'resuming worker…' : 'starting worker…', working: 'working…', idle: 'idle — your turn', exited: 'worker exited · a message resumes it', error: 'worker error', disconnected: 'stream lost — retrying' };
+    const map = { connecting: 'connecting…', starting: ev && ev.resume ? 'resuming worker…' : 'starting worker…', working: 'working…', idle: 'idle — your turn', exited: 'worker exited · a message resumes it', error: 'worker error', disconnected: 'stream lost — retrying', restarting: 'restarting the server\u2026' };
     chatSt.textContent = state ? map[state] || state : '';
     chatSt.className = 'dr-chat-st ' + (state || '');
     if (chatStopBtn) chatStopBtn.style.display = state === 'working' || state === 'idle' || state === 'starting' ? '' : 'none';
     if (chatTermBtn) chatTermBtn.style.display = state ? '' : 'none';
   }
-  const convoParts = (c) => { let path = c.page; try { path = new URL(c.page).pathname; } catch (e) {} const t = new Date(c.startedAt || c.lastAt); const hh = isNaN(t) ? '' : t.toTimeString().slice(0, 5); return { lb: `${hh} ${path}`, pins: c.pins ? c.pins + ' pin' + (c.pins === 1 ? '' : 's') : 'note', st: String(c.state || '') }; };
+  const convoParts = (c) => { let path = c.page; try { path = new URL(c.page).pathname; } catch (e) {} const t = new Date(c.startedAt || c.lastAt); const hh = isNaN(t) ? '' : t.toTimeString().slice(0, 5); if (c.kind === 'update' && c.update) return { lb: `${hh} \u2191 pinpoint ${c.update.from} \u2192 ${c.update.to}`, pins: 'update', st: String(c.state || '') }; return { lb: `${hh} ${path}`, pins: c.pins ? c.pins + ' pin' + (c.pins === 1 ? '' : 's') : 'note', st: String(c.state || '') }; };
   // How long an idle conversation has before the server closes it (worker.idleMinutes). The countdown
   // is the client's own arithmetic off the row's lastAt, so it ticks without polling; it is an estimate,
   // since the worker is asked for a recap first and that turn takes its own time.
@@ -1931,12 +1961,18 @@
   // transcript is the confirmation (the progress stack's toasts hide while the drawer is open). The root comes from
   // /api/health (fetched when the drawer is built); the session id rides on each /api/chat row.
   let chatRoot = '';
-  const loadRoot = () => fetch(API + '/api/health').then((r) => r.json()).then((h) => { if (h && h.root) chatRoot = String(h.root); chatUpdate = h && h.update && h.update.available ? h.update : null; updSync(); }).catch(() => {});
+  let chatUpdating = null, chatPid = 0; // the update conversation in progress (health.updating), and the server pid so a restart is noticed
+  // The version at the drawer's foot: the prelude's on load, then whatever /api/health says — a restarted server
+  // names its new version there before the page is reloaded (the overlay itself stays the one that loaded).
+  let chatVersion = BRAND.version ? String(BRAND.version) : '';
+  const verSync = () => { const v = chatEl && chatEl._ver; if (!v) return; v.textContent = chatVersion ? 'pinpoint ' + chatVersion : ''; v.title = chatVersion ? 'pinpoint-live ' + chatVersion + ' \u2014 the server this drawer talks to' : ''; };
+  const loadRoot = () => fetch(API + '/api/health').then((r) => r.json()).then((h) => { if (h && h.root) chatRoot = String(h.root); chatUpdate = h && h.update && h.update.available ? h.update : null; chatUpdating = h && h.updating ? String(h.updating) : null; chatPid = h && h.pid ? Number(h.pid) : 0; if (h && h.version && String(h.version) !== chatVersion) { chatVersion = String(h.version); verSync(); } updSync(); }).catch(() => {});
   // Newer pinpoint available? The server checks its package repo's tags (on start, every 4 hours, and on every worker
   // spawn or resume) and reports on /api/health and the prelude; the open drawer re-reads health with its conversation
-  // poll, so the header chip shows up shortly after the spawn that found it, and copies the update command on click.
+  // poll, so the update pill shows up shortly after the spawn that found it.
   let chatUpdate = BRAND.update && BRAND.update.available ? BRAND.update : null;
-  const updSync = () => { const b = chatEl && chatEl._upd; if (!b) return; b.style.display = chatUpdate ? '' : 'none'; if (chatUpdate) { b.textContent = 'v' + chatUpdate.latest + ' available'; b.title = 'Newer pinpoint: ' + chatUpdate.current + ' \u2192 ' + chatUpdate.latest + '. Click to copy the update command: ' + chatUpdate.command; } };
+  const UPD_KEY = BRAND.key + ':updDismissed'; // latest version the user dismissed with the pill's x: the pill stays hidden until a newer one shows up
+  const updSync = () => { const w = chatEl && chatEl._upd; if (!w) return; let seen = null; try { seen = localStorage.getItem(UPD_KEY); } catch (e) {} const show = !!chatUpdate && (seen !== chatUpdate.latest || !!chatUpdating); w.style.display = show ? '' : 'none'; if (!show) return; if (chatUpdating) { w._t.textContent = 'updating to ' + chatUpdate.latest + '\u2026'; w._go.title = 'A headless worker is installing pinpoint ' + chatUpdate.latest + ' \u2014 click to watch it'; return; } w._t.textContent = 'pinpoint ' + chatUpdate.latest + ' \u00b7 update'; w._go.title = 'Newer pinpoint: ' + chatUpdate.current + ' \u2192 ' + chatUpdate.latest + '. Click to update: a headless worker runs ' + chatUpdate.command + ', the server restarts on the new version, and the conversation ends with what changed.'; };
   const shq = (s) => (/^[\w./-]+$/.test(s) ? s : "'" + s.replace(/'/g, "'\\''") + "'");
   const clipWrite = (text) => { const fb = () => { const ta = document.createElement('textarea'); ta.value = text; ta.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); let ok = false; try { ok = document.execCommand('copy'); } catch (err) {} ta.remove(); return ok; }; return navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(text).then(() => true, () => fb()) : Promise.resolve(fb()); };
   async function handoffConvo() {
@@ -1955,6 +1991,28 @@
     } catch (e) { chatAppend({ t: 'error', text: 'Handoff failed: ' + (e && e.message ? e.message : e), at: new Date().toISOString() }); }
     chatTermBtn.disabled = false;
   }
+  // The old server is handing over to the one it just installed and its stream is about to close. Rather than let
+  // the EventSource retry into a second replay on top of the transcript, drop it, wait for a new pid on /api/health,
+  // then reopen the conversation (a clean replay) with a closing note, and re-read the update (gone with the new version).
+  let chatNote = null;
+  function awaitRestart(id, ev) {
+    if (chatEs) { chatEs.close(); chatEs = null; }
+    chatStatus('restarting'); chatUpdating = null;
+    const was = chatPid, t0 = Date.now();
+    const tick = () => {
+      if (chatUi.cur !== id || !chatOpen) return;
+      fetch(API + '/api/health').then((r) => r.json()).then((h) => {
+        if (!(h && h.ok && h.pid && h.pid !== was)) throw new Error('old');
+        chatNote = { t: 'status', note: true, text: 'pinpoint ' + (h.version || ev.to || '') + ' is running \u2014 reload the page to load its overlay', at: new Date().toISOString() };
+        loadRoot(); loadConvos().then(() => selectConvo(id));
+      }).catch(() => {
+        if (Date.now() - t0 < 90000) { setTimeout(tick, 1000); return; }
+        chatStatus('disconnected');
+        chatAppend({ t: 'error', text: 'The server did not come back after the restart. Start one: PINPOINT_DETACHED=1 PINPOINT_ROLE=http nohup bun run pinpoint serve > .docs/pinpoint/server.log 2>&1 & disown', at: new Date().toISOString() });
+      });
+    };
+    setTimeout(tick, 1000);
+  }
   // Forget a closed conversation locally: out of the list, and back to "New conversation" if it was the open one.
   function dropConvo(id) { chatConvos = chatConvos.filter((x) => x.id !== id); if (chatUi.cur === id) selectConvo(null); if (chatSel) chatSel.dataset.sig = ''; fillConvos(); }
   async function loadConvos() { try { const r = await fetch(API + BRAND.chat); chatConvos = r.ok ? await r.json() : []; } catch (e) { chatConvos = []; } fillConvos(); }
@@ -1971,9 +2029,12 @@
     if (!id) { chatStatus(null); chatAppend({ t: 'error', text: '' }); chatLs.innerHTML = ''; const d = el('div', 'm status'); d.innerHTML = 'A message here starts a new worker for this page (sent as a general note). Pins you place while the drawer is open are listed above the box and go out with it.'; chatLs.append(d); return; }
     chatStatus('connecting');
     chatEs = new EventSource(API + BRAND.chat + '/' + encodeURIComponent(id) + '/events');
+    let live = false; // false through the replay, true after its sync: only a live hand-over is followed, not its echo
     chatEs.onmessage = (e) => {
       let ev; try { ev = JSON.parse(e.data); } catch (err) { return; }
       if (ev.ready && ev.model && String(ev.model) !== liveModel) { liveModel = String(ev.model); modelSync(); if (modelLine) modelLine(); }
+      if (ev.t === 'sync') { live = true; if (chatNote) { const nt = chatNote; chatNote = null; setTimeout(() => chatAppend(nt), 0); } } // replay is over; a note held for after it goes last
+      if (ev.t === 'status' && ev.restarting && live) { chatAppend(ev); awaitRestart(id, ev); return; } // the stream is about to drop with the old server
       if (ev.t === 'status' || ev.t === 'sync') { chatStatus(ev.state, ev); if (ev.t === 'status') loadConvos(); }
       chatAppend(ev);
     };
