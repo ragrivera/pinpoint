@@ -47,8 +47,10 @@ resumes the same Claude session
 (`--resume <uuid>`). *stop* in the drawer ends the process early; *Continue in a terminal* (the
 `>_` button, `POST /api/chat/:id/handoff`) ends it too and copies `cd <root> && claude --resume <session>`
 to the clipboard (a handoff card in the transcript confirms it), so the same Claude session
-carries on in a terminal. A `vX.Y.Z available` chip in the drawer header means the package repo
-has a newer tag (checked on start, every 4 hours, and whenever a worker spawns or resumes); clicking it copies the update command. A message in the drawer
+carries on in a terminal. A `pinpoint X.Y.Z · update` pill floating over the transcript means the package repo
+has a newer tag (checked on start, every 4 hours, and whenever a worker spawns or resumes); clicking it starts a
+headless update worker (`POST /api/update`) that installs it and ends on a what's-new recap, after which the server
+restarts itself onto the new version and the drawer reconnects; `×` dismisses that version. A message in the drawer
 with no conversation selected starts a new worker for the page (sent as a note-only batch).
 Pins placed while the drawer is open ride along with the next message. Screenshots can be
 pasted or dropped into the drawer. `/` as the first character lists the skills and commands

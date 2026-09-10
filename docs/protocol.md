@@ -11,7 +11,7 @@ project root (the directory holding `.pinpoint.json`).
 .claude/skills/pinpoint/SKILL.md        the /pinpoint skill (committed)
 .docs/pinpoint/feedback/<id>.json       a batch nobody has claimed
 .docs/pinpoint/feedback/<id>.claimed-<who>.json   claimed by a session id (Claude pid) or worker id (w…)
-.docs/pinpoint/workers/<id>.json        worker record: state, session uuid, turns, cost
+.docs/pinpoint/workers/<id>.json        worker record: state, session uuid, turns, cost (+ kind: 'update', update: {from, to})
 .docs/pinpoint/workers/<id>.chat.jsonl  the worker's transcript (one event per line)
 .docs/pinpoint/workers/<id>/img-*.png   screenshots sent from the drawer
 .docs/pinpoint/workers/<id>/file-*.*    any other attachment (logs, CSVs, PDFs, source files)
@@ -67,15 +67,17 @@ All `/api/*` routes check `Origin`: allowed are the origins in `.pinpoint.json` 
 
 | route | purpose |
 |---|---|
-| `GET /pinpoint.js` | the overlay, prefixed with `window.__reviewBrand = {…}` (name, key, api paths, dispatch, port, requiredSession, models, model) |
+| `GET /pinpoint.js` | the overlay, prefixed with `window.__reviewBrand = {…}` (name, key, version, api paths, dispatch, port, requiredSession, models, model) |
 | `GET /.docs/open-design/**` | the project's open-design mockups (rooted at `<root>/.docs/open-design`); `.html` is served with the overlay `<script>` injected; the only static tree |
-| `GET /api/health` | `{ ok, root, port, project, name, dispatch, claudeBin, requiredSession, feedbackDir, model, models, sessions, handlers, workers, update }` — `update` is `null` until the first tag check has run (on start, then every 4 hours and on every worker spawn or resume), then `{ current, latest, available, checkedAt, repo, command }` (also on the overlay prelude) |
+| `GET /api/health` | `{ ok, version, pid, root, port, project, name, dispatch, claudeBin, requiredSession, feedbackDir, model, models, sessions, handlers, workers, update, updating, restarting }` — `update` is `null` until the first tag check has run (on start, then every 4 hours and on every worker spawn or resume), then `{ current, latest, available, checkedAt, repo, command }` (also on the overlay prelude); `updating` is the id of the update conversation while its worker is starting/working, else `null`; `restarting` is true once a hand-over has begun |
 | `POST /api/pins` | receive a batch → `{ ok, id, worker }`; `400` when `model` is not one the server offers; `409` with `hint` when session dispatch has no handler; `503` when a follower is asked to spawn a worker |
+| `POST /api/update` | `{ page?, title?, model?, effort? }` → `{ ok, id, existing }`: start the headless update worker for the version the check found (`existing: true` hands back the one already running); `409` when nothing is newer, when the package is not installed under the project (a clone: update with git, then `/api/restart`), or during a restart; `503` from a follower |
+| `POST /api/restart` | `{ ok, pid, version }` — the owner hands the port over to a fresh server (the project's installed bin, else what started this one) and stays as the relay for its MCP stdio; workers are ended first, a message resumes them |
 | `GET /api/pins/:id` | progress: `{ id, page, to, claimedBy, claimedLabel, worker, total, noteOnly, resolved, complete, progress }` |
 | `GET /api/sessions` | live sessions for the To: picker (handlers only on installed projects) |
 | `POST /api/sessions` | heartbeat from follower MCP processes `{ id, label, cwd }` |
 | `GET /api/skills` | skills + commands a worker can run (`~/.claude` and `<root>/.claude`, plus `/clear`, `/compact`) |
-| `GET /api/chat` | worker conversations, newest first (each with its Claude `session` id and `model`) |
+| `GET /api/chat` | worker conversations, newest first (each with its Claude `session` id and `model`; an update worker's row has `kind: 'update'` and `update: { from, to }`) |
 | `GET /api/chat/:id/events` | SSE: transcript replay, then live events |
 | `POST /api/chat/:id` | `{ text?, images?, pins?, model?, effort? }` → to the worker (`model` / `effort` switch it first, same as the routes below) (pins are appended to the batch, numbered on; a `/clear` text empties the batch's pins so the next ones start at #1 again) |
 | `POST /api/chat/:id/stop` | end the worker process (a later message resumes the session) |
@@ -92,7 +94,7 @@ All `/api/*` routes check `Origin`: allowed are the origins in `.pinpoint.json` 
 | `POST /api/flutter/clear` | drop all unsent taps; numbering restarts at 1 |
 
 Chat events (`t`): `batch`, `user`, `assistant`, `tool`, `tool_error`, `result`, `status`, `stderr`, `error`,
-`sync`. Status states: `starting`, `working`, `idle`, `exited`, `error`; a `status` with `closed: true` is a closed conversation's last event, and one with `modelSet: true` + `model` records a model switch.
+`sync`. Status states: `starting`, `working`, `idle`, `exited`, `error`; a `status` with `closed: true` is a closed conversation's last event, and one with `modelSet: true` + `model` records a model switch. A `batch` with `update: { from, to, command }` opens an update conversation; a `status` with `restarting: true` + `from` / `to` is the old server's last event before it hands over (the drawer drops the stream and reconnects to the new pid).
 
 ## Flutter capture (`pinpoint flutter`)
 
@@ -140,3 +142,15 @@ stdin; image blocks travel inline. After `worker.idleMinutes` the worker is aske
 (`recap: …`, rendered as its own block in the drawer) and stdin is closed once that turn lands, or after a
 two-minute grace; `worker.recapOnIdle: false` exits straight away. The next message restarts
 with `--resume <uuid>`. Verified against Claude Code 2.1.263.
+
+An UPDATE worker (`POST /api/update`) is the same process with a different brief: run the `bun add` from the update
+check, verify `node_modules/<pkg>/package.json`, read the package's `CHANGELOG.md` (or fetch it with `gh api` when
+the installed one predates shipping it) and reply with the entries newer than the running version inside a
+```` ```recap pinpoint <from> → <to> ```` block. When its turn's `result` lands and the install is newer than the
+running code, the server emits `{ t: 'status', restarting: true, from, to }` and restarts itself: it ends every worker,
+answers pending `wait_for_pins` with a timeout, stops the batch watch and its timers, stops the HTTP server, spawns
+`bun <root>/node_modules/<pkg>/bin/pinpoint.ts serve` when that install is newer than the running code (else its own
+argv[1], so an owner started from a clone stays on the clone) with `PINPOINT_ROOT` and
+`PINPOINT_PPID=<the Claude pid it served>`, and from then on only forwards its stdin to the child and the child's
+stdout back — Claude Code still holds the pipe to the original pid. The relay exits with the child, forwards
+SIGTERM/SIGINT/SIGHUP to it, and closes the child's stdin when its own ends.
