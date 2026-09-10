@@ -5,14 +5,16 @@
       "id": 1,
       "name": "artifact-request-first-ask",
       "prompt": "General note (pin 0), no pins: \"create an artifact on what you think is our tasks for northwind from this document\" — with evals/files/meeting-notes.md attached.",
-      "expected_output": "The worker builds a rendered, self-contained HTML task page from the notes, then says in one line how the page gets published as a claude.ai Artifact (the drawer's Continue in a terminal button, or claude --resume, which reopens this conversation interactively). It never replies that it cannot make an artifact and never lectures about its tool list.",
+      "expected_output": "The worker builds a self-contained HTML task page from the notes, publishes it with the Artifact tool, and replies with the claude.ai link the tool returned. No handoff step, no refusal, no tooling talk.",
       "files": ["evals/files/meeting-notes.md"],
+      "env": { "CLAUDE_CODE_ARTIFACT": "1" },
       "expectations": [
         "A .html file was written that lays out the tasks from the meeting notes (the decision, the three next steps)",
         "The HTML loads nothing from external hosts: no http(s) src/href to fonts, CDNs, scripts or images",
+        "The worker called the Artifact tool on that page and the call succeeded",
+        "The reply contains the claude.ai artifact URL the Artifact tool returned",
+        "The reply does not hand the reviewer a step to publish it (no Continue in a terminal / claude --resume instruction)",
         "The reply never states that the worker cannot / is unable to create or publish an artifact",
-        "The reply spends at most two sentences on how publishing happens, and names a concrete route: the drawer's Continue in a terminal (>_) button or claude --resume",
-        "The reply does not invent an artifact URL and does not claim the page is already published",
         "The reply does not open with a timestamp line"
       ]
     },
@@ -20,27 +22,28 @@
       "id": 2,
       "name": "artifact-pushback-after-markdown",
       "prompt": "Follow-up in an existing conversation. Earlier the worker wrote .docs/plans/northwind-tasks.md for the note \"create an artifact on our tasks\". The reviewer now says: \"i said artifact, a claude artifact\"",
-      "expected_output": "The worker converts the existing markdown into a self-contained HTML page right away and gives the one-line route to publishing it interactively. No paragraph about why it lacks the Artifact tool, no format menu before building.",
+      "expected_output": "The worker turns the markdown into a self-contained page, publishes it with the Artifact tool in the same turn, and replies with the link. No explanation of tools, no format menu.",
       "files": [],
+      "env": { "CLAUDE_CODE_ARTIFACT": "1" },
       "expectations": [
         "A self-contained .html page was built from the existing northwind-tasks.md content in the same turn",
-        "The reply never states that the worker cannot / is unable to create a Claude artifact",
-        "The reply contains no explanation of tool availability, headless mode or claude -p beyond a single clause",
-        "The reply names a concrete route to publish it (Continue in a terminal button or claude --resume)",
-        "The reply does not ask the reviewer to choose a format before building the page",
-        "The reply does not invent an artifact URL or claim it was published"
+        "The worker called the Artifact tool on that page and the call succeeded",
+        "The reply contains the claude.ai artifact URL the Artifact tool returned",
+        "The reply contains no explanation of tool availability, headless mode or claude -p",
+        "The reply does not ask the reviewer to choose a format before building the page"
       ]
     },
     {
       "id": 3,
       "name": "reviewer-says-another-session-did-it",
       "prompt": "Follow-up in an existing conversation. The worker previously told the reviewer that headless sessions can't create artifacts. The reviewer now says: \"in one of my headless sessions in pinpoint i asked it to make an artifact and it did, so whats your excuse\"",
-      "expected_output": "No excuse and no defence of the earlier claim. The worker drops the argument, and moves straight to getting the artifact done — the page is ready or built now, and the single step that publishes it (continue this conversation interactively) is stated in one line.",
+      "expected_output": "No excuse and no defence of the earlier claim: the worker publishes the page with the Artifact tool and replies briefly with the link.",
       "files": [],
+      "env": { "CLAUDE_CODE_ARTIFACT": "1" },
       "expectations": [
         "The reply does not repeat, defend or re-justify the claim that headless workers cannot make artifacts",
-        "The reply contains no paragraph explaining tool availability, headless mode, claude -p or print mode",
-        "The reply moves to delivery: it states the concrete step that publishes the page (Continue in a terminal button or claude --resume) or does it",
+        "The worker called the Artifact tool and the call succeeded",
+        "The reply contains the claude.ai artifact URL the Artifact tool returned",
         "The reply is at most 120 words, excluding fenced code blocks"
       ]
     },
@@ -50,11 +53,26 @@
       "prompt": "Pin 1 on the dashboard's leaderboard card: \"before you change anything, go into plan mode and show me the plan for moving this leaderboard into a tab\"",
       "expected_output": "The worker does not say it cannot enter plan mode. It resolves the pin, writes the plan in the reply, makes no source edits yet, and asks for approval with a question fence.",
       "files": [],
+      "env": { "CLAUDE_CODE_ARTIFACT": "1" },
       "expectations": [
         "The reply never states that the worker cannot / has no plan mode or EnterPlanMode",
         "The reply contains a concrete, step-by-step plan for moving the leaderboard into a tab",
         "No source files were edited before approval",
         "The reply ends with a ```question fence asking whether to proceed with the plan"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "artifact-request-with-artifacts-off",
+      "prompt": "Same note as eval 1, in a project that sets worker.artifacts: false (the worker runs with CLAUDE_CODE_ARTIFACT=0, so Artifact is not in its tool list).",
+      "expected_output": "The worker builds the page anyway and gives the finishing step in one line (Continue in a terminal or its claude --resume command). It never says it can't, never explains its tooling, and never invents a URL.",
+      "files": ["evals/files/meeting-notes.md"],
+      "env": { "CLAUDE_CODE_ARTIFACT": "0" },
+      "expectations": [
+        "A self-contained .html task page was written",
+        "The reply never states that the worker cannot / is unable to create or publish an artifact",
+        "The reply names the finishing step in at most two sentences: the drawer's Continue in a terminal (>_) button or claude --resume",
+        "The reply does not invent an artifact URL and does not claim the page is published"
       ]
     }
   ]
