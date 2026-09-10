@@ -962,7 +962,7 @@ if (httpOwner) {
   writeWorkerMcpCfg();
   loadWorkers();
   maybeCheckUpdate();
-  setInterval(maybeCheckUpdate, UPDATE_EVERY_MS); // and for a server left running with no workers
+  setInterval(maybeCheckUpdate, UPDATE_EVERY_MS).unref(); // and for a server left running with no workers
   if (DISPATCH === 'worker' && !existsSync(CLAUDE_BIN)) log(`WARNING: claude binary not found at ${CLAUDE_BIN}; worker dispatch will fail (set claudeBin in .pinpoint.json)`);
 }
 if (SELF) {

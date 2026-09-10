@@ -1932,9 +1932,9 @@
   // /api/health (fetched when the drawer is built); the session id rides on each /api/chat row.
   let chatRoot = '';
   const loadRoot = () => fetch(API + '/api/health').then((r) => r.json()).then((h) => { if (h && h.root) chatRoot = String(h.root); chatUpdate = h && h.update && h.update.available ? h.update : null; updSync(); }).catch(() => {});
-  // Newer pinpoint available? The server checks its package repo's tags (on start, every 4 hours, and on every worker spawn or resume) and
-  // reports on /api/health and the prelude; the open drawer re-reads health with its conversation poll, so the header
-  // chip shows up shortly after the spawn that found it, and copies the update command on click.
+  // Newer pinpoint available? The server checks its package repo's tags (on start, every 4 hours, and on every worker
+  // spawn or resume) and reports on /api/health and the prelude; the open drawer re-reads health with its conversation
+  // poll, so the header chip shows up shortly after the spawn that found it, and copies the update command on click.
   let chatUpdate = BRAND.update && BRAND.update.available ? BRAND.update : null;
   const updSync = () => { const b = chatEl && chatEl._upd; if (!b) return; b.style.display = chatUpdate ? '' : 'none'; if (chatUpdate) { b.textContent = 'v' + chatUpdate.latest + ' available'; b.title = 'Newer pinpoint: ' + chatUpdate.current + ' \u2192 ' + chatUpdate.latest + '. Click to copy the update command: ' + chatUpdate.command; } };
   const shq = (s) => (/^[\w./-]+$/.test(s) ? s : "'" + s.replace(/'/g, "'\\''") + "'");
