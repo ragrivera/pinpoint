@@ -71,6 +71,18 @@ Cost/latency: a worker pays the normal session cold start (~15–30 s) once per 
 runs like any Claude Code session. It has no human to ask: a `question` pin gets its answer
 in the pin note and the reply; the reviewer continues in the chat.
 
+**A missing tool is not a missing capability.** A worker's tool list is usually narrower than
+an interactive session's — no `Artifact`, no `AskUserQuestion`, no plan mode, none of the
+reviewer's claude.ai connectors; when the tool a request needs *is* listed, the worker uses it. Those tools are not withheld from the conversation, only from
+this connection: continue the same conversation interactively (*Continue in a terminal*, or
+from claude.ai) and they appear mid-conversation. So a worker never tells the reviewer it
+*can't* do something an interactive session can, and never explains its tooling. It does every
+part that needs no missing tool, then names the finishing step in one line: an "artifact" gets
+the page built now — self-contained, since the Artifact page's CSP blocks every external host —
+plus *Continue in a terminal* (`>_`) or the `claude --resume <session>` command from its brief
+to publish it. A plan-mode request needs no handoff: the plan goes in the reply and approval in a
+`question` fence. Brief step 8 carries this to the worker; `skill/evals/` checks it.
+
 Security: every `/api/*` route rejects browser requests whose `Origin` is not one of the
 project's app origins (from `.pinpoint.json` `apps[].origin`) or localhost / 127.0.0.1 /
 `*.localhost`. Workers run with permission prompts skipped, so that guard is what keeps a
@@ -261,8 +273,9 @@ the reviewer addresses this session explicitly.
 7. **Ask with a `question` fence — never make the reviewer type a choice.** A worker is
    spawned headless with only the pinpoint MCP loaded, so **`AskUserQuestion` does not exist
    here**. Its absence is the signal that you are answering into the drawer, *not* evidence
-   that there is no picker: the fence is the picker. Any reply that offers options ends in
-   one — first line the question, each `-` line a choice:
+   that there is no picker: the fence is the picker (the same rule as *a missing tool is not a
+   missing capability*). Any reply that offers options ends in one — first line the question,
+   each `-` line a choice:
 
    ````
    ```question
@@ -293,6 +306,10 @@ the reviewer addresses this session explicitly.
 - Don't hand the reviewer a numbered list and ask them to type back a number, and don't
   reason from a missing tool to "there is no way to ask" — choices go in a `question`
   fence (step 7). Typing is for the free-text box, not for picking.
+- Don't tell the reviewer you can't do something an interactive Claude Code session can —
+  publish an Artifact, plan first, read through a claude.ai connector — and don't explain the
+  tool list. Build what needs no missing tool, then hand the rest off in one line: *Continue in a
+  terminal* or `claude --resume <session>`. If they say another session did it, don't argue.
 - Don't commit/PR from a pin reply unless explicitly asked.
 - Don't loosen the Origin check or point the overlay at a non-localhost app: a worker acts
   on whatever is posted to it.
