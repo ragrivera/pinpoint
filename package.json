@@ -20,7 +20,7 @@
     },
     "./package.json": "./package.json"
   },
-  "files": ["bin", "src", "overlay", "skill", "README.md", "LICENSE"],
+  "files": ["bin", "src", "overlay", "skill", "README.md", "CHANGELOG.md", "LICENSE"],
   "engines": {
     "bun": ">=1.1"
   },
