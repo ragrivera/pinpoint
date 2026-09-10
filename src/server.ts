@@ -153,7 +153,7 @@ const LOOK_FILE = join(ROOT, '.docs', 'pinpoint', 'look.json');
 const LOOK_MAX = 64_000;
 const savedLook = (): unknown => { try { return JSON.parse(readFileSync(LOOK_FILE, 'utf8')); } catch { return null; } };
 const WORKER_MCP_CFG = join(WORKERS_DIR, 'mcp.json');
-const BRAND = { name: 'Pinpoint', key: 'pinpoint', api: '/api/pins', sessions: '/api/sessions', chat: '/api/chat', dispatch: DISPATCH, server: 'pinpoint', port: PORT, requiredSession: STRICT ? REQUIRED_SESSION : null, models: MODELS, model: DEFAULT_MODEL, efforts: EFFORTS, effort: DEFAULT_EFFORT, idleMinutes: WORKER_IDLE_MS / 60_000, recapOnIdle: RECAP_ON_IDLE };
+const BRAND = { name: 'Pinpoint', key: 'pinpoint', version: pkg.version, api: '/api/pins', sessions: '/api/sessions', chat: '/api/chat', dispatch: DISPATCH, server: 'pinpoint', port: PORT, requiredSession: STRICT ? REQUIRED_SESSION : null, models: MODELS, model: DEFAULT_MODEL, efforts: EFFORTS, effort: DEFAULT_EFFORT, idleMinutes: WORKER_IDLE_MS / 60_000, recapOnIdle: RECAP_ON_IDLE };
 
 // ─── Update check ─────────────────────────────────────────────────────────────
 // So people notice a newer pinpoint: on owner start, every 4 hours after that, and whenever a worker spawns
@@ -178,7 +178,7 @@ async function checkUpdate(): Promise<UpdateInfo | null> {
   const out = await new Response(proc.stdout).text().catch(() => '');
   clearTimeout(timer);
   if ((await proc.exited) !== 0) return null;
-  const tags = out.split('\n').map((l) => l.split('refs/tags/')[1] || '').filter((t) => semver(t));
+  const tags = out.split('\n').map((l) => l.split('refs/tags/')[1] || '').filter((t) => /^v?\d+\.\d+\.\d+$/.test(t)); // exactly vX.Y.Z: git allows ; | $ in tag names, and the tag reaches the update worker's brief as a command to run
   if (!tags.length) return null;
   const latest = tags.sort(semverCmp).pop()!.replace(/^v/, '');
   const spec = gh ? `github:${gh[1]}#v${latest}` : `${pkg.name}@${latest}`;
@@ -201,9 +201,12 @@ function claudeSessionName(pid: number): string | null {
 }
 // The label is read fresh (not frozen at startup) so a `/rename` of the Claude
 // session takes effect without restarting this process.
+// The Claude pid this MCP serves: the parent — or, once a self-restart (restartSelf) has put a relay in
+// between, the pid the relay hands down, so the restarted server keeps the session's id and label.
+const PPID = Number(process.env.PINPOINT_PPID) || process.ppid;
 const SELF: Session | null = HTTP_ONLY ? null : {
-  id: process.env.PINPOINT_SESSION_ID || String(process.ppid),
-  get label() { return process.env.PINPOINT_SESSION || claudeSessionName(process.ppid) || `${basename(ROOT)}#${process.ppid}`; },
+  id: process.env.PINPOINT_SESSION_ID || String(PPID),
+  get label() { return process.env.PINPOINT_SESSION || claudeSessionName(PPID) || `${basename(ROOT)}#${PPID}`; },
   cwd: ROOT,
   seenAt: Date.now(),
 };
@@ -402,9 +405,11 @@ function findSaved(id: string): string | null {
 }
 mkdirSync(FEEDBACK_DIR, { recursive: true });
 for (const f of readdirSync(FEEDBACK_DIR)) seen.add(f); // history is not "unread"
+let feedbackWatch: ReturnType<typeof watch> | null = null; // both stopped by restartSelf: a relay must never claim a batch
+let scanTimer: ReturnType<typeof setInterval> | null = null;
 if (SELF) {
-  try { watch(FEEDBACK_DIR, () => scanNewBatches()); } catch (e) { log('fs.watch unavailable, polling only', e); }
-  setInterval(scanNewBatches, 2000).unref();
+  try { feedbackWatch = watch(FEEDBACK_DIR, () => scanNewBatches()); } catch (e) { log('fs.watch unavailable, polling only', e); }
+  scanTimer = setInterval(scanNewBatches, 2000); scanTimer.unref();
 }
 
 // ─── "/" picker: the skills and custom commands a worker can run (user + project) ──
@@ -450,7 +455,7 @@ function listSkills(): SkillRow[] {
 
 // ─── Workers: one headless Claude per batch, chat over its stdin/stdout ────────
 type WState = 'starting' | 'working' | 'idle' | 'exited' | 'error';
-type WorkerRec = { batchId: string; workerId: string; sessionUuid: string; page: string; title: string; state: WState; started: boolean; startedAt: string; lastAt: string; turns: number; costUsd: number; model?: string; effort?: string; exitCode?: number | null };
+type WorkerRec = { batchId: string; workerId: string; sessionUuid: string; page: string; title: string; state: WState; started: boolean; startedAt: string; lastAt: string; turns: number; costUsd: number; model?: string; effort?: string; exitCode?: number | null; kind?: 'update'; update?: { from: string; to: string } }; // kind 'update': started by POST /api/update; update = the versions it moves between
 type ChatEvent = { t: string; at: string; [k: string]: unknown };
 const workers = new Map<string, Worker>();
 const rel = (p: unknown) => (typeof p === 'string' ? p.replace(ROOT + '/', '') : '');
@@ -708,6 +713,7 @@ class Worker {
         this.setState('idle');
         if (this.recapAsked) this.stop('idle timeout'); else this.armIdle(); // the recap was the last turn
         this.applyPicks(); // picked mid-turn: end the process now so the next message starts on it
+        if (this.rec.kind === 'update') afterUpdateTurn(this); // a newer package installed? the server restarts onto it
         break;
       default: break; // hooks, rate limits, partials
     }
@@ -799,7 +805,7 @@ function listChats() {
   return [...workers.values()].sort((a, b) => (a.rec.lastAt < b.rec.lastAt ? 1 : -1)).map((w) => {
     let pins = 0, general = '';
     try { const f = findSaved(w.rec.batchId); if (f) { const b = JSON.parse(readFileSync(f, 'utf8')) as Batch; pins = b.pins.length; general = (b.general || '').slice(0, 120); } } catch {}
-    return { id: w.rec.batchId, page: w.rec.page, title: w.rec.title, state: w.rec.state, session: w.rec.sessionUuid, model: w.rec.model || '', effort: w.rec.effort || '', startedAt: w.rec.startedAt, lastAt: w.rec.lastAt, turns: w.rec.turns, costUsd: Math.round(w.rec.costUsd * 1000) / 1000, pins, general };
+    return { id: w.rec.batchId, page: w.rec.page, title: w.rec.title, state: w.rec.state, session: w.rec.sessionUuid, model: w.rec.model || '', effort: w.rec.effort || '', startedAt: w.rec.startedAt, lastAt: w.rec.lastAt, turns: w.rec.turns, costUsd: Math.round(w.rec.costUsd * 1000) / 1000, pins, general, kind: w.rec.kind || '', update: w.rec.update || null };
   });
 }
 function sse(w: Worker, req: Request, headers: Record<string, string>) {
@@ -820,6 +826,100 @@ function sse(w: Worker, req: Request, headers: Record<string, string>) {
   return new Response(stream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', ...headers } });
 }
 
+// ─── Update + restart ─────────────────────────────────────────────────────────
+// The drawer's update pill (POST /api/update) starts a headless UPDATE worker: it runs the `bun add`
+// from the update check, reads the new package's CHANGELOG and ends its turn with a ```recap of what
+// changed. When that turn lands and the project's install is newer than the code running here, this
+// process restarts itself onto it (restartSelf). The new server is a CHILD, started on the freshly
+// installed bin (when that is newer than this code, else on what started this process); this one hands
+// the port over and stays only as a relay for its MCP stdio — Claude Code holds the pipe to THIS pid,
+// so exiting would drop the session's pinpoint MCP — forwarding stdin to the child and the child's
+// stdout back out. Workers are ended first (records and transcripts stay; a message resumes them), the
+// watch + timers stop so the relay never claims a batch or heartbeats, and PINPOINT_PPID carries the
+// Claude pid down so the child keeps the session id and label. POST /api/restart does the hand-over
+// without an update (a clone updated with git, say).
+const PKG_DIR = join(ROOT, 'node_modules', pkg.name); // the project's install of this package: what bun add updates and what a restart runs
+const PKG_BIN = join(PKG_DIR, 'bin', 'pinpoint.ts');
+const CHANGELOG = join(PKG_DIR, 'CHANGELOG.md');
+const installedVersion = (): string | null => { try { return String(JSON.parse(readFileSync(join(PKG_DIR, 'package.json'), 'utf8')).version || '') || null; } catch { return null; } };
+let updatingId: string | null = null; // the update conversation this server started, if any
+let restarting = false;
+let relay: ReturnType<typeof Bun.spawn> | null = null; // the restarted server, once this process has become its stdio relay
+let updTimer: ReturnType<typeof setInterval> | null = null;
+let hbTimer: ReturnType<typeof setInterval> | null = null;
+function relayWrite(s: string) { if (!relay) return; try { (relay.stdin as any).write(s); (relay.stdin as any).flush(); } catch {} }
+function updatePrompt(u: UpdateInfo): string {
+  const slug = gh ? gh[1] : '';
+  return [
+    `You are the PINPOINT update worker in ${ROOT}. A reviewer clicked "update" in the drawer: install ${pkg.name} ${u.latest} (this server runs ${u.current}) and tell them what changed. No one is watching a terminal: work autonomously and do not commit.`,
+    ``,
+    `Workflow:`,
+    `1. Run exactly this, from ${ROOT}: ${u.command}. It rewrites package.json and the lockfile — leave them uncommitted. If it fails, reply with the error and what to do about it, and stop.`,
+    `2. Verify: read ${join(PKG_DIR, 'package.json')} and confirm its "version" is ${u.latest}. If it is not, say so and stop.`,
+    `3. Read ${CHANGELOG} (newer packages ship it)${slug ? `; if it is missing, fetch it with: gh api "repos/${slug}/contents/CHANGELOG.md?ref=v${u.latest}" -H "Accept: application/vnd.github.raw"` : ''}. If that fails too, say the changelog was not available and still do step 4 with what you know.`,
+    `4. Reply with the entries newer than ${u.current}, distilled into a high-level recap a reviewer can read in a chat drawer: one line per change that matters to them, grouped by version when several shipped, no file paths, no commit hashes. Put it in a fenced block whose language is \`recap\` and whose info line names the range, exactly like this:`,
+    '```recap pinpoint ' + u.current + ' \u2192 ' + u.latest,
+    "- what changed, in the reviewer's terms",
+    '- ...',
+    '```',
+    `5. Do not restart, kill or reinstall anything else: the pinpoint server restarts itself onto ${u.latest} the moment this turn ends, and the drawer reconnects on its own. Never open a reply with a timestamp line.`,
+  ].join('\n');
+}
+function startUpdate(page: string, title: string, modelRaw?: unknown, effortRaw?: unknown): { id: string; existing: boolean } {
+  if (!httpOwner) throw new PinError(503, 'Not the HTTP owner', 'Only the owning pinpoint server can update itself.');
+  if (restarting) throw new PinError(409, 'Restarting', 'A restart is already under way — the drawer reconnects on its own.');
+  const cur = updatingId ? workers.get(updatingId) : null;
+  if (cur && (cur.rec.state === 'starting' || cur.rec.state === 'working')) return { id: cur.rec.batchId, existing: true }; // one update at a time: hand back the one running
+  const u = update;
+  if (!u || !u.available) throw new PinError(409, `${pkg.name} ${pkg.version} is up to date`, 'The update check found no newer tag on the package repo.');
+  if (!existsSync(PKG_DIR)) throw new PinError(409, `${pkg.name} is not installed under ${ROOT}`, "This server runs from a clone, not the project's node_modules — update it with git, then POST /api/restart.");
+  const model = String(modelRaw ?? DEFAULT_MODEL).trim();
+  if (!isModel(model)) throw new PinError(400, `Unknown model ${model}`, `This server offers: ${modelIds()} — add others to worker.models in .pinpoint.json.`);
+  const effort = String(effortRaw ?? DEFAULT_EFFORT).trim();
+  if (!isEffort(effort)) throw new PinError(400, `Unknown effort ${effort}`, `This server offers: ${effortIds()}.`);
+  const ts = new Date();
+  const id = `${ts.toISOString().replace(/[:.]/g, '-')}-update`;
+  const workerId = 'w' + Math.random().toString(36).slice(2, 8);
+  const general = `Update ${pkg.name} ${u.current} \u2192 ${u.latest}`;
+  mkdirSync(FEEDBACK_DIR, { recursive: true });
+  // A batch file like any worker's, pre-claimed, so pins sent into this conversation and get_pins behave.
+  const b: Batch = { id, receivedAt: ts.toISOString(), page, title, general, pins: [], to: workerId, claimedBy: workerId };
+  writeFileSync(join(FEEDBACK_DIR, `${id}.claimed-${workerId}.json`), JSON.stringify(b, null, 2));
+  const w = new Worker({ batchId: id, workerId, sessionUuid: crypto.randomUUID(), page, title, state: 'starting', started: false, startedAt: ts.toISOString(), lastAt: ts.toISOString(), turns: 0, costUsd: 0, model, effort, kind: 'update', update: { from: u.current, to: u.latest } });
+  workers.set(id, w); updatingId = id;
+  w.emit({ t: 'batch', pins: 0, general, page, title, images: [], update: { from: u.current, to: u.latest, command: u.command } });
+  w.sendRaw(updatePrompt(u));
+  log('update started', id, `${u.current} → ${u.latest}`, `→ worker ${workerId}`);
+  return { id, existing: false };
+}
+/** The update worker's turn is over: if the project now holds a newer package than this process runs, restart onto it. */
+function afterUpdateTurn(w: Worker) {
+  const have = installedVersion();
+  if (!have || semverCmp(have, pkg.version) <= 0) { log(`update ${w.rec.batchId}: installed ${have ?? 'nothing'}, running ${pkg.version} — staying`); return; }
+  w.emit({ t: 'status', state: w.rec.state, restarting: true, from: pkg.version, to: have });
+  log(`update ${w.rec.batchId}: ${have} installed over ${pkg.version} — restarting`);
+  setTimeout(() => restartSelf(`update to ${have}`), 400); // let the line reach the drawer first
+}
+function restartSelf(reason: string) {
+  if (relay || !httpOwner) return;
+  restarting = true;
+  log(`restarting (${reason})`);
+  for (const w of workers.values()) w.stop('server restart'); // records + transcripts stay; a message resumes each
+  for (const wait of waiters.splice(0)) wait(null); // pending wait_for_pins on this MCP: the child never sees their request ids
+  if (feedbackWatch) { try { feedbackWatch.close(); } catch {} feedbackWatch = null; }
+  for (const t of [scanTimer, updTimer, hbTimer]) if (t) clearInterval(t);
+  try { httpServer?.stop(true); } catch {} // release the port; the drawer's streams retry until the child answers
+  const have = installedVersion();
+  const bin = existsSync(PKG_BIN) && have && semverCmp(have, pkg.version) > 0 ? PKG_BIN : process.argv[1]; // the project's install when it is newer, else whatever started this one (a clone beside an older install stays on the clone)
+  const child = Bun.spawn([process.execPath, bin, 'serve'], { cwd: ROOT, env: { ...process.env, PINPOINT_ROOT: ROOT, PINPOINT_PPID: String(PPID) }, stdin: 'pipe', stdout: 'pipe', stderr: 'inherit' });
+  relay = child;
+  if (buf) { relayWrite(buf); buf = ''; } // a partial MCP line read before the switch
+  void (async () => { try { for await (const chunk of child.stdout as any) process.stdout.write(chunk); } catch {} })();
+  for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) process.on(sig, () => { try { child.kill(sig); } catch {} });
+  child.exited.then((code) => { log(`restarted server exited ${code}`); process.exit(code); });
+  log(`restarted: pid ${child.pid} on ${bin}; this process relays its MCP stdio`);
+}
+
 // ─── HTTP face (first session owns it; others run MCP-only and read the dir) ──
 // Browser callers must come from the project's own app origins (or localhost). Non-browser
 // callers (curl, `pinpoint report`) send no Origin and pass. A worker runs with permission
@@ -832,8 +932,9 @@ function originOk(o: string | null): boolean {
 }
 const corsFor = (req: Request) => ({ 'Access-Control-Allow-Origin': req.headers.get('origin') || '*', Vary: 'Origin', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' });
 let httpOwner = true;
+let httpServer: ReturnType<typeof Bun.serve> | null = null; // held so restartSelf can hand the port over
 try {
-  Bun.serve({
+  httpServer = Bun.serve({
     port: PORT, hostname: '127.0.0.1', idleTimeout: 0,
     async fetch(req) {
       const url = new URL(req.url);
@@ -882,7 +983,7 @@ try {
         flutterBus.emit({ t: 'cleared' });
         return Response.json({ ok: true }, { headers: CORS });
       }
-      if (url.pathname === '/api/health') return Response.json({ ok: true, root: ROOT, port: PORT, project: PROJECT.file ?? null, name: PROJECT_NAME, dispatch: DISPATCH, claudeBin: CLAUDE_BIN, requiredSession: STRICT ? REQUIRED_SESSION : null, feedbackDir: FEEDBACK_DIR, model: DEFAULT_MODEL, models: MODELS, effort: DEFAULT_EFFORT, efforts: EFFORTS, sessions: liveSessions().length, handlers: handlers().length, workers: [...workers.values()].filter((w) => w.proc).length, update }, { headers: CORS });
+      if (url.pathname === '/api/health') return Response.json({ ok: true, version: pkg.version, pid: process.pid, root: ROOT, port: PORT, project: PROJECT.file ?? null, name: PROJECT_NAME, dispatch: DISPATCH, claudeBin: CLAUDE_BIN, requiredSession: STRICT ? REQUIRED_SESSION : null, feedbackDir: FEEDBACK_DIR, model: DEFAULT_MODEL, models: MODELS, effort: DEFAULT_EFFORT, efforts: EFFORTS, sessions: liveSessions().length, handlers: handlers().length, workers: [...workers.values()].filter((w) => w.proc).length, update, updating: updatingId && ['starting', 'working'].includes(workers.get(updatingId)?.rec.state || '') ? updatingId : null, restarting }, { headers: CORS });
       if (url.pathname === '/api/skills' && req.method === 'GET') return Response.json(listSkills(), { headers: CORS });
       if (url.pathname === '/api/look') {
         if (req.method === 'GET') return Response.json(savedLook() ?? {}, { headers: CORS });
@@ -895,6 +996,15 @@ try {
           mkdirSync(dirname(LOOK_FILE), { recursive: true }); writeFileSync(LOOK_FILE, body);
           return Response.json({ ok: true }, { headers: CORS });
         }
+      }
+      if (url.pathname === '/api/update' && req.method === 'POST') {
+        const j = await req.json().catch(() => ({}));
+        try { const r = startUpdate(String(j?.page || ''), String(j?.title || ''), j?.model, j?.effort); return Response.json({ ok: true, ...r }, { headers: CORS }); }
+        catch (e: any) { const st = e instanceof PinError ? e.status : 500; log('update refused', st, e?.message); return Response.json({ ok: false, error: String(e?.message || e), hint: e?.hint ?? null }, { status: st, headers: CORS }); }
+      }
+      if (url.pathname === '/api/restart' && req.method === 'POST') {
+        setTimeout(() => restartSelf('POST /api/restart'), 200); // once this response is out
+        return Response.json({ ok: true, pid: process.pid, version: pkg.version }, { headers: CORS });
       }
       if (url.pathname === '/api/pins' && req.method === 'POST') {
         try { const b = receive(await req.json()); return Response.json({ ok: true, id: b.id, worker: Boolean((b as any).worker) }, { headers: CORS }); }
@@ -962,7 +1072,7 @@ if (httpOwner) {
   writeWorkerMcpCfg();
   loadWorkers();
   maybeCheckUpdate();
-  setInterval(maybeCheckUpdate, UPDATE_EVERY_MS).unref(); // and for a server left running with no workers
+  updTimer = setInterval(maybeCheckUpdate, UPDATE_EVERY_MS); updTimer.unref(); // and for a server left running with no workers
   if (DISPATCH === 'worker' && !existsSync(CLAUDE_BIN)) log(`WARNING: claude binary not found at ${CLAUDE_BIN}; worker dispatch will fail (set claudeBin in .pinpoint.json)`);
 }
 if (SELF) {
@@ -972,7 +1082,7 @@ if (SELF) {
     fetch(`http://127.0.0.1:${PORT}/api/sessions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(SELF) }).catch(() => {});
   };
   heartbeat();
-  setInterval(heartbeat, 15_000).unref();
+  hbTimer = setInterval(heartbeat, 15_000); hbTimer.unref();
 }
 
 // ─── MCP face ─────────────────────────────────────────────────────────────────
@@ -1032,9 +1142,11 @@ async function handle(msg: any) {
 let buf = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
+  if (relay) { relayWrite(String(chunk)); return; } // after a self-restart the child answers; this process only forwards
   buf += chunk; let i;
   while ((i = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1); if (!line) continue; try { void handle(JSON.parse(line)); } catch { log('bad json', line.slice(0, 80)); } }
 });
 // Detached launch (PINPOINT_DETACHED=1): no MCP consumer on stdin, so don't exit on EOF —
 // a plain `nohup bun server.ts &` otherwise binds, logs the banner, and dies instantly.
-if (process.env.PINPOINT_DETACHED !== '1') process.stdin.on('end', () => process.exit(0));
+// A relay closes its child's stdin instead, and leaves when the child does.
+process.stdin.on('end', () => { if (relay) { try { (relay.stdin as any).end(); } catch {} return; } if (process.env.PINPOINT_DETACHED !== '1') process.exit(0); });

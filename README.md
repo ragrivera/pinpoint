@@ -116,9 +116,13 @@ the worker brief then edits the artifact's authoring source, never app code. Not
 
 **Updates.** On server start, every 4 hours after that, and whenever a worker spawns or resumes, the server runs `git ls-remote --tags`
 on this package's repo (your own git credentials, so a private repo works) and compares the highest `vX.Y.Z` tag
-with the installed version. A newer one shows as a `vX.Y.Z available` chip in the chat drawer's header (click
-copies the `bun add` command) and as `update` on `/api/health`. It never delays a spawn; `"updateCheck": false`
-or `PINPOINT_NO_UPDATE_CHECK=1` turns it off. Releases are tags: bump `version`, tag `vX.Y.Z`, push the tag.
+with the installed version. A newer one shows as a `pinpoint X.Y.Z · update` pill floating over the drawer's transcript
+(`×` dismisses that version) and as `update` on `/api/health`. Clicking the pill starts a headless UPDATE worker
+(`POST /api/update`): it runs the `bun add`, reads the new package's `CHANGELOG.md` and ends on a what's-new recap;
+the server then restarts itself onto the new version (the old process stays as a relay for its MCP stdio, so a Claude
+session keeps its pinpoint MCP) and the drawer reconnects on its own. `POST /api/restart` hands over without an
+update. The check never delays a spawn; `"updateCheck": false` or `PINPOINT_NO_UPDATE_CHECK=1` turns it off.
+Releases are tags: bump `version`, tag `vX.Y.Z`, push the tag.
 
 **Security.** Every `/api/*` route rejects browser requests whose `Origin` is not one of the repo's app origins
 (from `.pinpoint.json` `apps[].origin`) or `localhost` / `127.0.0.1` / `*.localhost`. The server binds
@@ -190,6 +194,7 @@ PINPOINT_DETACHED=1 PINPOINT_ROLE=http nohup bun run pinpoint serve > .docs/pinp
 | `PINPOINT_OVERLAY` | serve a different overlay file (default `overlay/pinpoint.js`) |
 | `PINPOINT_NO_UPDATE_CHECK=1` | never look for a newer pinpoint (see `updateCheck`) |
 | `PINPOINT_UPDATE_REPO` | check another git remote (or local path) for version tags instead of this package's repo |
+| `PINPOINT_PPID` | set by a self-restart: the Claude pid the restarted server keeps as its session id + label (the relay's parent) |
 
 ## Troubleshooting
 

@@ -55,6 +55,7 @@ describe('HTTP owner', () => {
     const brand = JSON.parse(js.slice('window.__reviewBrand = '.length, js.indexOf('\n')).replace(/;$/, ''));
     expect(brand).toMatchObject({ name: 'Pinpoint', key: 'pinpoint', api: '/api/pins', chat: '/api/chat', dispatch: 'session', port, requiredSession: 'pinpoint_acme' });
     expect(brand).toMatchObject({ idleMinutes: 30, recapOnIdle: true }); // the drawer counts down to the idle close with these
+    expect(brand.version).toBe(JSON.parse(readFileSync(join(import.meta.dir, '..', 'package.json'), 'utf8')).version); // named at the drawer's foot
     expect(js).toContain('dr-fp'); // the overlay body follows
   });
   test('serves an open-design mockup with the overlay injected, and nothing outside that tree', async () => {
@@ -299,6 +300,12 @@ describe('worker dispatch spawns claude with the picked model', () => {
     expect(vals.every((v) => v === '1')).toBe(true);
   }, 20000);
 
+  test('POST /api/update is refused while the check has found nothing newer', async () => {
+    const r = await wPost('/api/update', { page: `${ORIGIN}/home`, title: 'Home' });
+    expect(r.status).toBe(409);
+    expect((await r.json()).error).toContain('up to date');
+  });
+
   test('leaves --model off when the batch picks the default', async () => {
     const id = await sendBatch('');
     const { a, chat } = await spawnedFor(id);
@@ -500,4 +507,161 @@ describe('update check on every worker spawn', () => {
     expect((await post(`/api/chat/${id}`, { text: 'again' })).status).toBe(200);
     await waitFor(async () => (await latest()) === '52.0.0', 10000);
   }, 45000);
+});
+
+// The update pill starts a headless worker (POST /api/update) with the install brief; when its turn lands and the
+// project's install is newer than the running server, the server restarts itself onto it and stays as the MCP relay.
+// The fixture's node_modules holds a package.json that stands in for the install; its version decides the restart.
+describe('update worker + self-restart', () => {
+  const ORIGIN = 'http://selfupd.localhost:5173';
+  let port: number;
+  let project: ReturnType<typeof tmpProject>;
+  let tags: ReturnType<typeof tmpProject>;
+  let owner: ReturnType<typeof Bun.spawn>;
+  let base: string;
+  const running = JSON.parse(readFileSync(join(import.meta.dir, '..', 'package.json'), 'utf8')).version as string;
+  const pkgFile = () => join(project.root, 'node_modules', 'pinpoint-live', 'package.json');
+  const git = (...a: string[]) => { const r = Bun.spawnSync(['git', '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...a], { cwd: tags.root }); if (r.exitCode !== 0) throw new Error(r.stderr.toString()); };
+  const health = async () => (await (await fetch(base + '/api/health')).json());
+  const post = (path: string, body: unknown) => fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: ORIGIN }, body: JSON.stringify(body) });
+  const row = async (id: string) => (await (await fetch(base + '/api/chat')).json()).find((c: any) => c.id === id);
+  const transcript = (id: string) => readFileSync(join(project.root, '.docs', 'pinpoint', 'workers', id + '.chat.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+
+  beforeAll(async () => {
+    port = await freePort();
+    project = tmpProject({
+      'fake-claude.sh': [
+        '#!/bin/sh',
+        'echo \'{"type":"system","subtype":"init","model":"stub"}\'',
+        'while IFS= read -r line; do',
+        '  printf \'%s\\n\' "$line" >> "$(dirname "$0")/stdin-$$.txt"',
+        '  sleep 2', // long enough for a second click to land while the first update is still working
+        '  echo \'{"type":"result","subtype":"success","is_error":false,"duration_ms":1,"num_turns":1,"total_cost_usd":0}\'',
+        'done',
+      ].join('\n') + '\n',
+      'node_modules/pinpoint-live/package.json': JSON.stringify({ name: 'pinpoint-live', version: '0.0.1' }), // older than what runs: no restart after the turn
+    });
+    writeFileSync(join(project.root, '.pinpoint.json'), JSON.stringify({ port, name: 'selfupd', dispatch: 'worker', claudeBin: join(project.root, 'fake-claude.sh'), apps: [{ dir: '.', origin: ORIGIN }] }));
+    Bun.spawnSync(['chmod', '+x', join(project.root, 'fake-claude.sh')]);
+    tags = tmpProject({ 'README.md': 'pinpoint' });
+    git('init', '-q'); git('add', '-A'); git('commit', '-q', '-m', 'init'); git('tag', 'v77.0.0');
+    git('tag', 'v99.0.0;x'); // a valid git tag carrying a shell metachar: the check must skip it, since the tag lands in the update worker's command
+    base = `http://127.0.0.1:${port}`;
+    owner = Bun.spawn(['bun', BIN, 'serve'], { cwd: project.root, env: cleanEnv({ PINPOINT_ROOT: project.root, PINPOINT_ROLE: 'http', PINPOINT_DETACHED: '1', PINPOINT_UPDATE_REPO: tags.root }), stdout: 'ignore', stderr: 'pipe' });
+    await waitFor(async () => (await fetch(base + '/api/health')).ok, 15000);
+    await waitFor(async () => (await health()).update?.latest === '77.0.0', 10000);
+  }, 30000);
+  afterAll(() => { try { owner.kill(); } catch {} project.rm(); tags.rm(); });
+
+  test('health names the running version and pid, with nothing updating', async () => {
+    const h = await health();
+    expect(h.version).toBe(running);
+    expect(typeof h.pid).toBe('number');
+    expect(h.updating).toBe(null);
+    expect(h.restarting).toBe(false);
+  });
+
+  test('POST /api/update starts one update worker with the install brief; a second click hands back the same one', async () => {
+    const r = await post('/api/update', { page: `${ORIGIN}/home`, title: 'Home', model: 'sonnet' });
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j).toMatchObject({ ok: true, existing: false });
+    expect(j.id).toEndWith('-update');
+    const again = await post('/api/update', { page: `${ORIGIN}/home`, title: 'Home' });
+    expect(await again.json()).toMatchObject({ ok: true, id: j.id, existing: true });
+    expect((await health()).updating).toBe(j.id);
+    const c = await row(j.id);
+    expect(c).toMatchObject({ kind: 'update', update: { from: running, to: '77.0.0' }, model: 'sonnet', pins: 0 });
+    // the brief reached the process: the exact command, the changelog to read, the recap block to end on
+    let raw = '';
+    await waitFor(async () => { raw = readdirSync(project.root).filter((n) => n.startsWith('stdin-')).map((n) => readFileSync(join(project.root, n), 'utf8')).join('\n'); return raw.includes('#v77.0.0'); }, 10000);
+    expect(raw).toContain('bun add -D github:ragrivera/pinpoint#v77.0.0');
+    expect(raw).toContain('CHANGELOG.md');
+    expect(raw).toContain('```recap pinpoint ' + running + ' \u2192 77.0.0');
+    expect(raw).toContain('restarts itself');
+    // the transcript opened on the update, and the batch file is pre-claimed like any worker's
+    expect(transcript(j.id)[0]).toMatchObject({ t: 'batch', update: { from: running, to: '77.0.0' } });
+    expect(readdirSync(join(project.root, '.docs', 'pinpoint', 'feedback')).some((n) => n.startsWith(j.id + '.claimed-'))).toBe(true);
+    // the turn lands, the install (0.0.1) is older than what runs: no restart, same pid, the pill is free again
+    const pid = (await health()).pid;
+    await waitFor(async () => (await row(j.id)).state === 'idle', 10000);
+    expect((await health()).pid).toBe(pid);
+    expect((await health()).updating).toBe(null);
+    expect(transcript(j.id).some((e: any) => e.restarting)).toBe(false);
+  }, 30000);
+
+  test('a turn that leaves a newer install behind restarts the server onto it; the old process relays and the new one lists the conversation', async () => {
+    writeFileSync(pkgFile(), JSON.stringify({ name: 'pinpoint-live', version: '77.0.0' }));
+    const before = await health();
+    const r = await post('/api/update', { page: `${ORIGIN}/home`, title: 'Home' });
+    expect(r.status).toBe(200);
+    const { id } = await r.json();
+    await waitFor(async () => { try { const h = await health(); return Boolean(h.ok && h.pid && h.pid !== before.pid); } catch { return false; } }, 25000);
+    const h = await health();
+    expect(h.port).toBe(port);
+    expect(h.root).toBe(project.root);
+    expect(h.restarting).toBe(false);
+    expect(h.updating).toBe(null);
+    // the hand-over is in the transcript, and the new server revived the conversation from disk
+    await waitFor(async () => transcript(id).some((e: any) => e.t === 'status' && e.restarting === true), 5000);
+    expect(transcript(id).find((e: any) => e.restarting)).toMatchObject({ from: running, to: '77.0.0' });
+    await waitFor(async () => (await row(id))?.state === 'exited', 10000);
+    expect(await row(id)).toMatchObject({ kind: 'update', update: { from: running, to: '77.0.0' } });
+    expect(owner.exitCode).toBe(null); // the old process is still there: the relay
+  }, 45000);
+
+  test('POST /api/restart hands over without an update', async () => {
+    const before = await health();
+    const r = await post('/api/restart', {});
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ ok: true, pid: before.pid, version: running });
+    await waitFor(async () => { try { const h = await health(); return Boolean(h.ok && h.pid && h.pid !== before.pid); } catch { return false; } }, 25000);
+    expect((await health()).port).toBe(port);
+  }, 30000);
+
+  test('ending the relay ends the restarted server with it: nothing is left on the port', async () => {
+    owner.kill();
+    await waitFor(async () => { try { await fetch(base + '/api/health'); return false; } catch { return true; } }, 15000);
+  }, 20000);
+});
+
+// A Claude session holds its stdio pipe to the pid it spawned, so a self-restart must keep that pid answering MCP (as
+// the relay) and keep the session's id: the child is the relay's child, not Claude's, so PINPOINT_PPID carries the id.
+describe('self-restart keeps the MCP session', () => {
+  const ORIGIN = 'http://relay.localhost:5173';
+  let port: number;
+  let project: ReturnType<typeof tmpProject>;
+  let mcp: ReturnType<typeof mcpClient>;
+  let base: string;
+  const health = async () => (await (await fetch(base + '/api/health')).json());
+  const sessionIds = async () => ((await (await fetch(base + '/api/sessions')).json()) as { id: string }[]).map((s) => s.id);
+
+  beforeAll(async () => {
+    port = await freePort();
+    project = tmpProject();
+    writeFileSync(join(project.root, '.pinpoint.json'), JSON.stringify({ port, name: 'relay', updateCheck: false, apps: [{ dir: '.', origin: ORIGIN }] }));
+    base = `http://127.0.0.1:${port}`;
+    mcp = mcpClient({ PINPOINT_SESSION: 'pinpoint_relay' }, project.root); // no PINPOINT_SESSION_ID: the id is the parent pid, the thing under test
+    await waitFor(async () => (await sessionIds()).length === 1, 15000);
+  }, 20000);
+  afterAll(() => { mcp.kill(); project.rm(); });
+
+  test('the old pid relays MCP to the restarted server, which keeps the session id', async () => {
+    const [id] = await sessionIds();
+    const before = await health();
+    const r = await fetch(base + '/api/restart', { method: 'POST', headers: { Origin: ORIGIN } });
+    expect(r.status).toBe(200);
+    await waitFor(async () => { try { const h = await health(); return Boolean(h.ok && h.pid !== before.pid); } catch { return false; } }, 25000);
+    const tools = await mcp.call('tools/list'); // written to the old pid's stdin, answered by the child through it
+    expect(tools.result.tools.map((t: any) => t.name)).toContain('get_pins');
+    await waitFor(async () => (await sessionIds()).length === 1, 10000); // the child's own registry, filled by its first heartbeat
+    expect(await sessionIds()).toEqual([id]);
+    expect(mcp.proc.exitCode).toBe(null);
+  }, 45000);
+
+  test("closing the session's stdin ends the relay, and the restarted server with it", async () => {
+    (mcp.proc.stdin as any).end();
+    await mcp.proc.exited;
+    await waitFor(async () => { try { await fetch(base + '/api/health'); return false; } catch { return true; } }, 15000);
+  }, 20000);
 });

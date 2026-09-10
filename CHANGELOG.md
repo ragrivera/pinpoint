@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Features
+- ✨ Update from the drawer. The `pinpoint X.Y.Z · update` pill starts a headless UPDATE worker
+  (`POST /api/update`): it runs the `bun add` from the update check, reads the new package's
+  `CHANGELOG.md` and ends its turn on a ```` ```recap ```` block of what changed, drawn in the recap
+  frame. When that turn lands and the project's install is newer than the running server, the server
+  restarts itself onto it: the new server is a child on the freshly installed bin, the old process hands
+  the port over and stays as a relay for its MCP stdio (Claude Code holds that pipe, so exiting would
+  drop the session's pinpoint MCP), every worker is ended first (a message resumes it), and
+  `PINPOINT_PPID` keeps the session id and label across the hand-over. The drawer follows it — drops
+  the stream, waits for a new pid on `/api/health`, reopens the conversation cleanly and says the new
+  version is running. `POST /api/restart` hands over without an update (a clone updated with git).
+  `/api/health` gains `version`, `pid`, `updating`, `restarting`; `/api/chat` rows gain `kind` and
+  `update`; the conversation picker names an update conversation by its versions (server, overlay)
+- ✨ ```` ```recap ```` fenced blocks render in the recap frame, the info line as the label (overlay)
+- ✨ The drawer's foot names the pinpoint version it talks to, bottom right on the shortcuts row: the prelude's
+  `version` on load, then whatever `/api/health` reports, so a restarted server shows its new version before the
+  page is reloaded (overlay, server)
+
+### Changed
+- 💄 The update notice is a pill floating over the top of the transcript — zero layout height, centred,
+  amber border on the drawer's own dark, an `↑`, the version, and an `×` that dismisses that version
+  (remembered per browser). It used to be a full-width bar under the conversation switcher (overlay)
+- 💄 The recap frame is set smaller: 8.5px body under a 9.5px label (was 11.5px), with tighter padding
+  and a finer 4px/3px dash, so a recap reads as a footnote to the turn rather than its loudest block (overlay)
+- 🔒 The update check only takes exact `vX.Y.Z` tags: the tag now lands in the command the update worker runs,
+  and git allows `;` `|` `$` in tag names (server)
+- 📦 `CHANGELOG.md` ships in the package, so the update worker can read what changed (package)
+
 ## [0.6.1] - 2026-09-10
 
 ### Changed
