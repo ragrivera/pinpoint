@@ -1308,14 +1308,14 @@
      left, right and bottom edges. Those are painted with repeating gradients rather than a dashed border,
      because border-style:dashed leaves the dash length to the browser and at 1px it picks one too fine to
      read; the gradients make dash and gap exact numbers. */
-  .dr-chat .m .rc{--rc-d:5px;--rc-g:4px;--rc-c:rgba(var(--dr-w),.32);
+  .dr-chat .m .rc{--rc-d:4px;--rc-g:3px;--rc-c:rgba(var(--dr-w),.32);
     --rc-dash-h:repeating-linear-gradient(90deg,var(--rc-c) 0 var(--rc-d),transparent var(--rc-d) calc(var(--rc-d) + var(--rc-g)));
     --rc-dash-v:repeating-linear-gradient(180deg,var(--rc-c) 0 var(--rc-d),transparent var(--rc-d) calc(var(--rc-d) + var(--rc-g)));
-    margin:15px 0 3px;padding:0 12px 12px;color:var(--dr-fg2);font:11.5px/1.62 ui-monospace,Menlo,SFMono-Regular,monospace;
+    margin:12px 0 3px;padding:0 8px 8px;color:var(--dr-fg2);font:8.5px/1.45 ui-monospace,Menlo,SFMono-Regular,monospace;
     background-image:var(--rc-dash-h),var(--rc-dash-v),var(--rc-dash-v);background-size:100% 1px,1px 100%,1px 100%;
     background-position:left bottom,left top,right top;background-repeat:repeat-x,repeat-y,repeat-y}
-  .dr-chat .m .rc .rl{position:relative;top:-5px;display:flex;align-items:center;gap:8px;margin:0 -12px 7px;font:600 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.11em;text-transform:uppercase;color:var(--dr-fg3b)}
-  .dr-chat .m .rc .rl::before{content:'';flex:none;width:16px;height:1px;background-image:var(--rc-dash-h)}
+  .dr-chat .m .rc .rl{position:relative;top:-5px;display:flex;align-items:center;gap:6px;margin:0 -8px 4px;font:600 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.11em;text-transform:uppercase;color:var(--dr-fg3b)}
+  .dr-chat .m .rc .rl::before{content:'';flex:none;width:12px;height:1px;background-image:var(--rc-dash-h)}
   .dr-chat .m .rc .rl::after{content:'';flex:1;height:1px;background-image:var(--rc-dash-h)}
   .dr-chat .m .rc.old,.dr-chat .m.rc-only{display:none} /* a superseded recap, and a message that was nothing else */
   .dr-chat .m.ai.rc-solo{padding-left:0}.dr-chat .m.ai.rc-solo::before{content:none} /* an assistant message that is nothing but a recap: the frame marks it, so no bullet and no gutter. Scoped to .ai so a reviewer who types a literal "recap:" line keeps their '>' and bubble padding. */
