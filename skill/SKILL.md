@@ -28,7 +28,8 @@ in the overlay:
 1. writes the batch to `.docs/pinpoint/feedback/<id>.claimed-<workerId>.json` (pre-claimed —
    no session can take it, the progress card never says "waiting"), and
 2. spawns a **worker**: `claude -p --input-format stream-json --output-format stream-json
-   --dangerously-skip-permissions --session-id <uuid>` from the repo root, with only the
+   --dangerously-skip-permissions --session-id <uuid>` from the repo root, with `CLAUDE_CODE_ARTIFACT=1` in its
+   environment (the `Artifact` tool; `worker.artifacts: false` turns it off) and only the
    pinpoint MCP loaded (`worker.mcp: "all"` loads every user MCP). The worker gets a brief
    with the page, viewport, general note and pins, resolves them to source, fixes in place,
    reports each pin through `report_pin`, and replies as a numbered list.
@@ -71,28 +72,36 @@ Cost/latency: a worker pays the normal session cold start (~15–30 s) once per 
 runs like any Claude Code session. It has no human to ask: a `question` pin gets its answer
 in the pin note and the reply; the reviewer continues in the chat.
 
-**A missing tool is not a missing capability.** A worker's tool list is usually narrower than
-an interactive session's — no `Artifact`, no `AskUserQuestion`, no plan mode, none of the
-reviewer's claude.ai connectors; when the tool a request needs *is* listed, the worker uses it. Those tools are not withheld from the conversation, only from
-this connection: continue the same conversation interactively (*Continue in a terminal*, or
-from claude.ai) and they appear mid-conversation. So a worker never tells the reviewer it
-*can't* do something an interactive session can, and never explains its tooling. It does every
-part that needs no missing tool, then names the finishing step in one line: an "artifact" gets
-the page built now — self-contained, since the Artifact page's CSP blocks every external host —
-plus *Continue in a terminal* (`>_`) or the `claude --resume <session>` command from its brief
-to publish it. A plan-mode request needs no handoff: the plan goes in the reply and approval in a
-`question` fence. Brief step 8 carries this to the worker; `skill/evals/` checks it.
+**Artifacts are published by the worker.** `claude -p` leaves the `Artifact` tool off unless
+`CLAUDE_CODE_ARTIFACT` is on, so pinpoint starts every worker with it. An "artifact" request gets
+the page built self-contained, published with `Artifact`, and answered with the link the tool
+returns — the reviewer never has to open a session to finish it. The page is private to the
+reviewer's claude.ai account until they share it. A print session skips the live-comment watch;
+republishing the same file from the same conversation keeps the URL.
+
+**A missing tool is not a missing capability.** Other interactive-session tools can still be
+missing from a worker's list — `AskUserQuestion`, plan mode, the reviewer's claude.ai connectors.
+A worker never tells the reviewer it *can't* do something an interactive session can, and never
+explains its tooling. A plan-mode request needs no tool: the plan goes in the reply and approval
+in a `question` fence. Only when a request needs a tool that is not in the list (`Artifact` too,
+in a project that sets `worker.artifacts: false`) does the worker do every part that needs no
+missing tool and name the finishing step in one line: *Continue in a terminal* (`>_`) or the
+`claude --resume <session>` command from its brief. Brief step 8 carries this to the worker;
+`skill/evals/` checks it.
 
 Security: every `/api/*` route rejects browser requests whose `Origin` is not one of the
 project's app origins (from `.pinpoint.json` `apps[].origin`) or localhost / 127.0.0.1 /
 `*.localhost`. Workers run with permission prompts skipped, so that guard is what keeps a
-foreign page from posting into one. Do not widen it.
+foreign page from posting into one. With artifacts on, the same guard is also what keeps a foreign page from publishing through the
+reviewer's claude.ai account (pages are private to that account until shared). Do not widen it.
 
 `"dispatch": "session"` (or `PINPOINT_DISPATCH=session`) restores the loop below — a live
 `pinpoint_<name>` session claims batches. Either way the **To:** picker can address a live
 session explicitly, and *Headless worker* forces a worker for one batch. Other keys:
 `claudeBin` (path to the `claude` binary; default `which claude` → `~/.local/bin/claude`),
-`worker.args` (extra `claude` flags), `worker.model` / `worker.models` (the model pill).
+`worker.args` (extra `claude` flags), `worker.model` / `worker.models` (the model pill),
+`worker.artifacts` (default `true`: workers publish claude.ai Artifacts themselves; `false` sets
+`CLAUDE_CODE_ARTIFACT=0`).
 
 ## Flutter apps — tap-to-pin with zero app code
 
@@ -306,10 +315,11 @@ the reviewer addresses this session explicitly.
 - Don't hand the reviewer a numbered list and ask them to type back a number, and don't
   reason from a missing tool to "there is no way to ask" — choices go in a `question`
   fence (step 7). Typing is for the free-text box, not for picking.
-- Don't tell the reviewer you can't do something an interactive Claude Code session can —
-  publish an Artifact, plan first, read through a claude.ai connector — and don't explain the
-  tool list. Build what needs no missing tool, then hand the rest off in one line: *Continue in a
-  terminal* or `claude --resume <session>`. If they say another session did it, don't argue.
+- Don't hand the reviewer a step you can do. An artifact is published by the worker and the reply
+  carries the link. Don't tell them you can't do something an interactive Claude Code session
+  can, and don't explain the tool list; hand off in one line (*Continue in a terminal* or
+  `claude --resume <session>`) only when a needed tool is genuinely absent. If they say another
+  session did it, don't argue.
 - Don't commit/PR from a pin reply unless explicitly asked.
 - Don't loosen the Origin check or point the overlay at a non-localhost app: a worker acts
   on whatever is posted to it.

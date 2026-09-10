@@ -164,6 +164,7 @@ PINPOINT_DETACHED=1 PINPOINT_ROLE=http nohup bun run pinpoint serve > .docs/pinp
     "recapOnIdle": true,        // ask the worker for a one-line recap before the idle timeout closes it
     "mcp": "pinpoint",          // "all" loads every user MCP
     "args": [],                 // extra claude flags
+    "artifacts": true,          // workers start with CLAUDE_CODE_ARTIFACT=1, so they publish claude.ai Artifacts themselves; false sets 0
     "model": "",                // preselects the model pill ("" = whatever claude is set to)
     "effort": "",               // preselects the effort pill: low | medium | high | xhigh | max ("" = whatever claude does)
     "models": []                // replaces the offered list: ["opus", { "id": "fable", "label": "Fable", "note": "most capable" }]
@@ -183,6 +184,7 @@ PINPOINT_DETACHED=1 PINPOINT_ROLE=http nohup bun run pinpoint serve > .docs/pinp
 | `PINPOINT_ROLE=http` | HTTP owner only: no session identity, never claims batches |
 | `PINPOINT_DETACHED=1` | keep serving with no MCP client on stdin |
 | `PINPOINT_DISPATCH` | `worker` \| `session`, overrides `.pinpoint.json` |
+| `CLAUDE_CODE_ARTIFACT` | set on every worker: `1` unless `worker.artifacts: false` (then `0`); a non-empty value the server inherited is kept when artifacts are on |
 | `PINPOINT_SESSION`, `PINPOINT_SESSION_ID` | override the session label / id |
 | `PINPOINT_CLAUDE` | path to the `claude` binary for workers |
 | `PINPOINT_OVERLAY` | serve a different overlay file (default `overlay/pinpoint.js`) |
