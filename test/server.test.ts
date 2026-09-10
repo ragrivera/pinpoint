@@ -203,6 +203,7 @@ describe('worker dispatch spawns claude with the picked model', () => {
         'printf \'%s\\n\' "$@" > "$(dirname "$0")/argv-$$.txt"',
         'echo \'{"type":"system","subtype":"init","model":"stub"}\'',
         'while IFS= read -r line; do',
+        '  printf \'%s\\n\' "$line" >> "$(dirname "$0")/stdin-$$.txt"',
         '  echo \'{"type":"result","subtype":"success","is_error":false,"duration_ms":1,"num_turns":1,"total_cost_usd":0}\'',
         'done',
       ].join('\n') + '\n',
@@ -265,6 +266,23 @@ describe('worker dispatch spawns claude with the picked model', () => {
     expect(second.a).toContain(first.chat.session); // new process, same conversation
     expect((await chatRow(id)).model).toBe('haiku');
   }, 30000);
+
+  // A headless worker lacks tools an interactive session has (Artifact, AskUserQuestion, plan mode,
+  // claude.ai connectors). It once spent five turns telling the reviewer it "can't" make an artifact;
+  // the brief is what stops that, so it has to reach the process.
+  test('the brief tells the worker a missing tool is not a missing capability, with its own resume command', async () => {
+    const id = await sendBatch('');
+    const { chat } = await spawnedFor(id);
+    let raw = '';
+    await waitFor(async () => {
+      const f = readdirSync(wProject.root).filter((n) => n.startsWith('stdin-')).map((n) => readFileSync(join(wProject.root, n), 'utf8')).find((t) => t.includes(id));
+      raw = f || '';
+      return Boolean(f);
+    }, 10000);
+    expect(raw).toContain('A missing tool is not a missing capability');
+    expect(raw).toContain('Artifact');
+    expect(raw).toContain(`claude --resume ${chat.session}`);
+  }, 20000);
 
   test('leaves --model off when the batch picks the default', async () => {
     const id = await sendBatch('');
