@@ -34,6 +34,14 @@
   let liveModel = '';
   const prettyModel = (id) => { const s = String(id || '').trim(); const m = MODELS.find((x) => x.id && x.id === s); return m ? m.label : s.replace(/^claude-/, '').replace(/-\d{8}\b/, '').replace(/^([a-z]+)-/, '$1 ').replace(/-(?=\d)/g, '.').replace(/-/g, ' ').trim(); };
   const modelInUse = (v) => (v ? modelLabel(v) : prettyModel(liveModel) || modelLabel(''));
+  // How hard the worker thinks (claude --effort). Same shape as the model pick — this browser's
+  // choice, per project, used by the next Send — except the CLI never reports the effort it settled
+  // on, so an unset pill says "effort" rather than naming a default it cannot know.
+  const EFFORTS = Array.isArray(BRAND.efforts) && BRAND.efforts.length ? BRAND.efforts : [];
+  const EFFORT_KEY = BRAND.key + ':effort';
+  const effortPref = () => { let v = null; try { v = localStorage.getItem(EFFORT_KEY); } catch (e) {} return v !== null && EFFORTS.some((x) => x.id === v) ? v : (BRAND.effort || ''); };
+  const setEffortPref = (v) => { try { localStorage.setItem(EFFORT_KEY, v); } catch (e) {} };
+  const effortLabel = (v) => { const m = EFFORTS.find((x) => x.id === (v || '')); return v && m ? m.label : 'effort'; };
   let modelLine = null; // the panel's "Model:" line, re-synced when the drawer's pill moves
   const CONTINUE_MS = 30 * 60 * 1000;
   let convoTarget = null, convoForceNew = false, convoLine = null;
@@ -725,11 +733,11 @@
   async function send() {
     const chosen = BRAND.sessions ? (localStorage.getItem(BRAND.key + ':to') || '') : '';
     const cont = AUTO_WORKER && !chosen && convoTarget && !convoForceNew ? convoTarget : null;
-    const body = { page: location.href, title: document.title, viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio }, state: appState(), general: state.general, pins: state.pins, to: BRAND.sessions ? (chosen || (AUTO_WORKER ? 'worker' : '')) : undefined, model: modelPref() };
+    const body = { page: location.href, title: document.title, viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio }, state: appState(), general: state.general, pins: state.pins, to: BRAND.sessions ? (chosen || (AUTO_WORKER ? 'worker' : '')) : undefined, model: modelPref(), effort: effortPref() };
     try {
       if (cont) {
         // Continue the page's conversation: the drawer's own path (pins are appended to its batch, numbered on).
-        const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(cont.id), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: state.general, pins: state.pins, model: modelPref() }) });
+        const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(cont.id), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: state.general, pins: state.pins, model: modelPref(), effort: effortPref() }) });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error([j.error, j.hint].filter(Boolean).join(' \u2014 ') || String(r.status));
         if (state.pins.length) { if (Number(j.total) > 0) { if (snHidden) snSetHidden(false); snRetrack(cont.id, Number(j.total)); } else snNotice('Sent, but this pinpoint server ignored the pins \u2014 restart it.', 'err', 8000); }
@@ -1249,6 +1257,7 @@
   .dr-chat-rt .dr-chat-send{margin-left:5px}
   .dr-chat-mw .tg{height:21px;padding:0 7px;display:flex;align-items:center;gap:5px;border:1px solid rgba(var(--dr-w),.12);background:transparent;border-radius:999px;cursor:pointer;color:var(--dr-fg3);font:700 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.05em;text-transform:uppercase;white-space:nowrap}
   .dr-chat-mw .tg:hover,.dr-chat-mw.open .tg{background:rgba(var(--dr-w),.12);color:var(--dr-fg)}
+  .dr-chat-mw.set .tg{color:var(--dr-fg2);border-color:rgba(var(--dr-w),.2)}
   .dr-chat-mw .chev{flex:none;display:inline-block;width:4px;height:4px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(1px) rotate(225deg);color:var(--dr-fg3);transition:transform .22s cubic-bezier(.22,.61,.36,1)}
   .dr-chat-mw.open .chev{transform:translateY(-2px) rotate(45deg)}
   .dr-chat-mw .menu{position:absolute;left:0;top:auto;bottom:calc(100% + 6px);z-index:3;min-width:210px;background:rgba(var(--dr-g),.97);border:1px solid rgba(var(--dr-w),.12);border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,.4);padding:4px}
@@ -1372,12 +1381,17 @@
   .dr-chat-btn{font-size:13px}
   .dr-chat-att{flex:none;display:flex;gap:6px;flex-wrap:wrap;padding:10px 0 0}
   .dr-chat-att .a{position:relative;width:56px;height:56px;border-radius:8px;overflow:hidden;border:1px solid rgba(var(--dr-w),.15);background:rgba(0,0,0,.2)}
+  /* Not an image: nothing to preview, so the chip is the filename. */
+  .dr-chat-att .a.doc{width:auto;max-width:170px;height:auto;padding:7px 22px 7px 9px;display:flex;align-items:center;background:rgba(var(--dr-w),.06)}
+  .dr-chat-att .a.doc .n{min-width:0;font:11px/1.3 ui-monospace,Menlo,monospace;color:var(--dr-fg2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .dr-chat-att img{width:100%;height:100%;object-fit:cover;display:block}
   .dr-chat-att .x{position:absolute;top:2px;right:2px;width:18px;height:18px;border:0;border-radius:99px;background:rgba(0,0,0,.65);color:#fff;font:12px/18px system-ui,sans-serif;cursor:pointer;padding:0}
   .dr-chat-clip{flex:none;width:28px;height:28px;display:grid;place-items:center;border:0;border-radius:8px;background:transparent;color:var(--dr-fg3b);cursor:pointer;padding:0}
   .dr-chat-clip:hover{background:rgba(var(--dr-w),.08);color:var(--dr-fg)}
   .dr-chat .m .imgs{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
   .dr-chat .m .imgs img{width:64px;height:64px;object-fit:cover;border-radius:8px;cursor:zoom-in;display:block;border:1px solid rgba(0,0,0,.15)}
+  .dr-chat .m .imgs .doc{align-self:center;max-width:100%;padding:5px 9px;border-radius:8px;border:1px solid rgba(var(--dr-w),.15);background:rgba(var(--dr-w),.06);color:var(--dr-fg2);font:11px/1.3 ui-monospace,Menlo,monospace;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dr-chat .m .imgs .doc:hover{color:var(--dr-fg);border-color:rgba(var(--dr-w),.28)}
   .dr-chat.drop::after{content:'Drop screenshots to attach';position:absolute;inset:8px;border:2px dashed #39d98a;border-radius:14px;background:rgba(57,217,138,.08);display:grid;place-items:center;font:600 12px ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:#39d98a;pointer-events:none}
   .dr-chat-pins{flex:none;display:flex;flex-direction:column;gap:6px;padding:10px 0 0;max-height:32vh;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(var(--dr-w),.18) transparent}
   .dr-chat-pins .it{display:flex;gap:10px;align-items:flex-start;padding:6px 10px;border-radius:10px;background:rgba(var(--dr-w),.04);border:1px solid rgba(var(--dr-w),.07);cursor:pointer}
@@ -1393,14 +1407,27 @@
   .dr-lb .cap{display:flex;gap:14px;align-items:center;font:11px ui-monospace,Menlo,monospace;color:rgba(255,255,255,.7);cursor:default}
   .dr-lb .cap a{color:#fff;text-decoration:none;padding:3px 9px;border-radius:999px;background:rgba(255,255,255,.12)}.dr-lb .cap a:hover{background:rgba(255,255,255,.22)}
   @media (prefers-reduced-motion:reduce){.dr-lb,.dr-lb img{transition:none}}`;
-  let chatLs = null, chatTa = null, chatSel = null, chatSt = null, chatSendBtn = null, chatStopBtn = null, chatTermBtn = null, chatModel = null, chatEs = null, chatConvos = [], chatPoll = null, chatAtBottom = true;
-  let chatAtt = null, chatFiles = []; // pending screenshots: { name, type, data (base64), preview (data URL), w, h }
-  const IMG_MAX_EDGE = 1600, IMG_MAX = 6;
-  const imgsHtml = (imgs) => Array.isArray(imgs) && imgs.length ? `<div class="imgs">${imgs.map((i) => `<img src="${esc(API + i.url)}" alt="${esc(i.name || '')}" title="${esc(i.name || '')}">`).join('')}</div>` : '';
+  let chatLs = null, chatTa = null, chatSel = null, chatSt = null, chatSendBtn = null, chatStopBtn = null, chatTermBtn = null, chatModel = null, chatEffort = null, chatEs = null, chatConvos = [], chatPoll = null, chatAtBottom = true;
+  let chatAtt = null, chatFiles = []; // pending attachments: { name, type, data (base64), img, preview?, w?, h?, size? }
+  const IMG_MAX_EDGE = 1600, IMG_MAX = 6, FILE_MAX_BYTES = 6_000_000;
+  const kb = (n) => (n < 1024 ? n + ' B' : n < 1024 * 1024 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
+  const imgsHtml = (imgs) => Array.isArray(imgs) && imgs.length ? `<div class="imgs">${imgs.map((i) => (i.img === false
+    ? `<a class="doc" href="${esc(API + i.url)}" target="_blank" rel="noopener" title="${esc(i.name || '')}">${esc(i.name || 'file')}</a>`
+    : `<img src="${esc(API + i.url)}" alt="${esc(i.name || '')}" title="${esc(i.name || '')}">`)).join('')}</div>` : '';
   const pinsHtml = (p) => p && p.count ? `<div class="pins">📌 ${p.count} pin${p.count === 1 ? '' : 's'} · #${p.first}${p.count > 1 ? '–#' + (p.first + p.count - 1) : ''}</div>` : '';
-  function addImageFile(file) {
-    if (!file || !/^image\//.test(file.type)) return;
-    if (chatFiles.length >= IMG_MAX) { chatAppend({ t: 'error', text: `Up to ${IMG_MAX} screenshots per message.`, at: new Date().toISOString() }); return; }
+  // Any file can ride along. An image is downscaled and sent inline, because that is the only way the
+  // model can see it; everything else is sent as-is and lands as a path the worker can Read.
+  function addFile(file) {
+    if (!file) return;
+    if (chatFiles.length >= IMG_MAX) { chatAppend({ t: 'error', text: `Up to ${IMG_MAX} attachments per message.`, at: new Date().toISOString() }); return; }
+    if (!/^image\//.test(file.type)) {
+      if (file.size > FILE_MAX_BYTES) { chatAppend({ t: 'error', text: `${file.name || 'That file'} is ${kb(file.size)} — the limit is ${kb(FILE_MAX_BYTES)}.`, at: new Date().toISOString() }); return; }
+      const fr = new FileReader();
+      fr.onload = () => { const d = String(fr.result || ''); chatFiles.push({ name: file.name || 'attachment', type: file.type || 'application/octet-stream', data: d.slice(d.indexOf(',') + 1), img: false, size: file.size }); renderAtt(); };
+      fr.onerror = () => chatAppend({ t: 'error', text: `Could not read ${file.name || 'that file'}.`, at: new Date().toISOString() });
+      fr.readAsDataURL(file);
+      return;
+    }
     const img = new Image(), url = URL.createObjectURL(file);
     img.onload = () => {
       URL.revokeObjectURL(url);
@@ -1410,7 +1437,7 @@
       c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
       let type = 'image/png', durl = c.toDataURL(type);
       if (durl.length > 3500000) { type = 'image/jpeg'; durl = c.toDataURL(type, 0.85); }
-      chatFiles.push({ name: file.name || 'screenshot.png', type, data: durl.slice(durl.indexOf(',') + 1), preview: durl, w: c.width, h: c.height });
+      chatFiles.push({ name: file.name || 'screenshot.png', type, data: durl.slice(durl.indexOf(',') + 1), preview: durl, w: c.width, h: c.height, img: true });
       renderAtt();
     };
     img.onerror = () => URL.revokeObjectURL(url);
@@ -1420,9 +1447,14 @@
     if (!chatAtt) return;
     chatAtt.innerHTML = ''; chatAtt.style.display = chatFiles.length ? '' : 'none'; renderStage();
     chatFiles.forEach((f, i) => {
-      const a = el('div', 'a'); const im = document.createElement('img'); im.src = f.preview; im.title = `${f.name} · ${f.w}×${f.h}`;
+      const a = el('div', 'a' + (f.img === false ? ' doc' : ''));
       const x = el('button', 'x', '×'); x.title = 'Remove'; x.onclick = () => { chatFiles.splice(i, 1); renderAtt(); };
-      a.append(im, x); chatAtt.append(a);
+      if (f.img === false) {
+        const n = el('span', 'n', esc(f.name)); a.title = `${f.name} · ${kb(f.size || 0)}`; a.append(n, x);
+      } else {
+        const im = document.createElement('img'); im.src = f.preview; im.title = `${f.name} · ${f.w}×${f.h}`; a.append(im, x);
+      }
+      chatAtt.append(a);
     });
   }
   // Mirror of the panel's pin list: the panel hides while the drawer is open, so pending pins
@@ -1442,7 +1474,10 @@
   function renderStage() {
     const st = chatEl && chatEl._stage; if (!st) return;
     const np = state.pins.length, nf = chatFiles.length; st.style.display = np || nf ? '' : 'none';
-    const parts = []; if (np) parts.push(np + ' pin' + (np === 1 ? '' : 's')); if (nf) parts.push(nf + ' screenshot' + (nf === 1 ? '' : 's'));
+    const shots = chatFiles.filter((f) => f.img !== false).length, docs = nf - shots;
+    const parts = []; if (np) parts.push(np + ' pin' + (np === 1 ? '' : 's'));
+    if (shots) parts.push(shots + ' screenshot' + (shots === 1 ? '' : 's'));
+    if (docs) parts.push(docs + ' file' + (docs === 1 ? '' : 's'));
     st._tg.innerHTML = '<i class="chev"></i>' + parts.join(' · ') + ' · go out with your message';
   }
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -1555,30 +1590,33 @@
     if (chatUi.taH) chatTa.style.height = Math.max(44, Math.min(window.innerHeight / 2, Number(chatUi.taH))) + 'px';
     chatTa.addEventListener('paste', (e) => {
       const items = e.clipboardData && e.clipboardData.items; if (!items) return;
-      let got = false; for (const it of items) if (it.kind === 'file' && /^image\//.test(it.type)) { addImageFile(it.getAsFile()); got = true; }
+      let got = false; for (const it of items) if (it.kind === 'file') { addFile(it.getAsFile()); got = true; }
       if (got) e.preventDefault();
     });
-    const fi = document.createElement('input'); fi.type = 'file'; fi.accept = 'image/*'; fi.multiple = true; fi.style.display = 'none';
-    fi.onchange = () => { [...fi.files].forEach(addImageFile); fi.value = ''; };
+    const fi = document.createElement('input'); fi.type = 'file'; fi.multiple = true; fi.style.display = 'none';
+    fi.onchange = () => { [...fi.files].forEach(addFile); fi.value = ''; };
     const ICO = { clip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>', up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>' };
-    const clip = el('button', 'dr-chat-clip', ICO.clip); clip.type = 'button'; clip.setAttribute('aria-label', 'Attach screenshots'); clip.title = 'Attach screenshots (or paste / drop them)'; clip.onclick = () => fi.click();
+    const clip = el('button', 'dr-chat-clip', ICO.clip); clip.type = 'button'; clip.setAttribute('aria-label', 'Attach files'); clip.title = 'Attach files — screenshots go to the model, anything else lands as a path it can read (or paste / drop them)'; clip.onclick = () => fi.click();
     chatSendBtn = el('button', 'dr-chat-send', ICO.up); chatSendBtn.type = 'button'; chatSendBtn.setAttribute('aria-label', 'Send'); chatSendBtn.title = 'Send (Enter)'; chatSendBtn.onclick = chatSubmit;
     // Model pill: which Claude runs this conversation — in the composer, beside the attach button,
     // because it is a property of the message you are about to send. Picking one also becomes this
     // browser's default for the next new conversation, so the panel's Send agrees with what it says.
-    if (MODELS.length > 1) {
-      chatModel = el('div', 'dr-chat-mw');
-      const mTg = el('button', 'tg'); mTg.type = 'button'; mTg.setAttribute('aria-haspopup', 'listbox'); mTg.setAttribute('aria-expanded', 'false');
-      const mMenu = el('div', 'menu'); mMenu.setAttribute('role', 'listbox'); mMenu.style.display = 'none';
-      const mClose = () => { mMenu.style.display = 'none'; chatModel.classList.remove('open'); mTg.setAttribute('aria-expanded', 'false'); chatMenuClose = null; };
-      mTg.onclick = () => { const mine = chatMenuClose === mClose; if (chatMenuClose) chatMenuClose(); if (mine) return; mMenu.style.display = ''; chatModel.classList.add('open'); mTg.setAttribute('aria-expanded', 'true'); chatMenuClose = mClose; };
-      mMenu.addEventListener('click', (e) => { const it = e.target.closest('.it'); if (!it) return; mClose(); pickModel(it.dataset.model || ''); });
-      chatModel.append(mTg, mMenu); chatModel._tg = mTg; chatModel._menu = mMenu;
-      MODELS.forEach((m) => { const it = el('div', 'it'); it.dataset.model = m.id; it.setAttribute('role', 'option'); it.innerHTML = '<span class="ck"></span><span class="lb">' + esc(m.label) + '</span>' + (m.note ? '<span class="d">' + esc(m.note) + '</span>' : ''); mMenu.append(it); });
-      modelSync();
-    }
+    // One pill, two uses: the model and the effort differ only in their list and what a pick does.
+    const pickerPill = (list, key, onPick) => {
+      const w = el('div', 'dr-chat-mw');
+      const tg = el('button', 'tg'); tg.type = 'button'; tg.setAttribute('aria-haspopup', 'listbox'); tg.setAttribute('aria-expanded', 'false');
+      const menu = el('div', 'menu'); menu.setAttribute('role', 'listbox'); menu.style.display = 'none';
+      const close = () => { menu.style.display = 'none'; w.classList.remove('open'); tg.setAttribute('aria-expanded', 'false'); chatMenuClose = null; };
+      tg.onclick = () => { const mine = chatMenuClose === close; if (chatMenuClose) chatMenuClose(); if (mine) return; menu.style.display = ''; w.classList.add('open'); tg.setAttribute('aria-expanded', 'true'); chatMenuClose = close; };
+      menu.addEventListener('click', (e) => { const it = e.target.closest('.it'); if (!it) return; close(); onPick(it.dataset[key] || ''); });
+      list.forEach((m) => { const it = el('div', 'it'); it.dataset[key] = m.id; it.setAttribute('role', 'option'); it.innerHTML = '<span class="ck"></span><span class="lb">' + esc(m.label) + '</span>' + (m.note ? '<span class="d">' + esc(m.note) + '</span>' : ''); menu.append(it); });
+      w.append(tg, menu); w._tg = tg; w._menu = menu;
+      return w;
+    };
+    if (MODELS.length > 1) { chatModel = pickerPill(MODELS, 'model', pickModel); modelSync(); }
+    if (EFFORTS.length > 1) { chatEffort = pickerPill(EFFORTS, 'effort', pickEffort); effortSync(); }
     const box = el('div', 'dr-chat-box'), tools = el('div', 'dr-chat-tools'), toolsL = el('div', 'dr-chat-lt'), toolsR = el('div', 'dr-chat-rt');
-    toolsL.append(clip, ...(chatModel ? [chatModel] : [])); toolsR.append(chatTermBtn, chatStopBtn, chatSendBtn);
+    toolsL.append(clip, ...(chatModel ? [chatModel] : []), ...(chatEffort ? [chatEffort] : [])); toolsR.append(chatTermBtn, chatStopBtn, chatSendBtn);
     tools.append(toolsL, toolsR); box.append(chatTa, tools);
     // "/" picker: a slash as the first character lists the skills / commands the worker can run (GET /api/skills).
     let slashItems = null, slashIdx = 0, slashRows = [];
@@ -1632,7 +1670,7 @@
       const inner = el('div'); const fd = el('div', 'dr-chat-fold'); fd.append(inner); box.append(tg, fd); box._tg = tg; box._in = inner; return box;
     };
     const hint = fold('dr-chat-hint', 'hintOpen', 'Show / hide the shortcuts', false); hint._tg.innerHTML = '<i class="chev"></i>shortcuts';
-    hint._in.innerHTML = '<kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> newline · paste or drop screenshots · <kbd>Esc</kbd> closes · <kbd>/</kbd> lists skills · drag the bar above the box to resize it';
+    hint._in.innerHTML = '<kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> newline · paste or drop files · <kbd>Esc</kbd> closes · <kbd>/</kbd> lists skills · drag the bar above the box to resize it';
     chatAtt = el('div', 'dr-chat-att'); chatAtt.style.display = 'none';
     const pinsBox = el('div', 'dr-chat-pins'); pinsBox.style.display = 'none'; chatEl._pins = pinsBox; // pending panel pins, sent with the next message
     // Staging block: the pending pins + screenshots that go out with the next message (hidden while both are empty).
@@ -1641,7 +1679,7 @@
     chatEl.addEventListener('dragenter', (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); dragDepth++; chatEl.classList.add('drop'); } });
     chatEl.addEventListener('dragover', (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
     chatEl.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; chatEl.classList.remove('drop'); } });
-    chatEl.addEventListener('drop', (e) => { e.preventDefault(); dragDepth = 0; chatEl.classList.remove('drop'); if (e.dataTransfer) [...e.dataTransfer.files].forEach(addImageFile); });
+    chatEl.addEventListener('drop', (e) => { e.preventDefault(); dragDepth = 0; chatEl.classList.remove('drop'); if (e.dataTransfer) [...e.dataTransfer.files].forEach(addFile); });
     chatLs.addEventListener('click', (e) => {
       const t = e.target; if (t instanceof HTMLImageElement && t.closest('.imgs')) return openLightbox(t.src, t.alt, t.getBoundingClientRect());
       const cp = t instanceof Element ? t.closest('.cp') : null; if (cp) { const pre = cp.parentElement && cp.parentElement.querySelector('pre'); copyText(pre ? pre.textContent : '', cp); return; }
@@ -1703,6 +1741,7 @@
         if (ev.compacted) return n('status', 'context compacted' + (ev.pre ? ' · ' + (ev.pre / 1000).toFixed(1) + 'k → ' + (ev.post / 1000).toFixed(1) + 'k tokens' : ''));
         if (ev.handoff) return n('status handoff', '<span class="hi" aria-hidden="true">&gt;_</span><b>Handed off to a terminal</b><span class="sub">The resume command is on your clipboard — paste it in a terminal to carry this session on there. A message here starts a new worker on the same session.</span>');
         if (ev.modelSet) return n('status', 'model \u2192 ' + esc(modelLabel(ev.model)) + ' — the worker restarts on it, resuming this session');
+        if (ev.effortSet) return n('status', 'effort \u2192 ' + esc(effortLabel(ev.effort)) + ' — the worker restarts on it, resuming this session');
         // idle-recap, stopping and exited say nothing the header status line does not: they stay out of the transcript
         if (ev.state === 'starting') return n('status', ev.resume ? 'resuming the worker session…' : 'starting a worker…');
         if (ev.ready) return n('status', 'worker ready' + (ev.model ? ' · ' + esc(ev.model) : ''));
@@ -1821,6 +1860,25 @@
     chatModel._tg.title = 'Model the worker runs — ' + modelInUse(cur) + (cur ? ' (claude --model ' + cur + ')' : liveModel ? ' (the claude binary\'s own default — ' + liveModel + ')' : ' (the claude binary\'s own default)');
     chatModel._menu.querySelectorAll('.it').forEach((it) => { const id = it.dataset.model || '', on = id === cur; it.setAttribute('aria-selected', String(on)); it.querySelector('.ck').innerHTML = on ? '&#10003;' : ''; const d = id ? null : it.querySelector('.d'); if (d) d.textContent = liveModel ? 'running ' + prettyModel(liveModel) : DEFAULT_NOTE; });
   }
+  function effortSync() {
+    if (!chatEffort) return;
+    const cur = effortPref();
+    chatEffort._tg.innerHTML = '<span class="lb">' + esc(effortLabel(cur)) + '</span><i class="chev"></i>';
+    chatEffort._tg.title = cur ? 'How hard the worker thinks — ' + effortLabel(cur) + ' (claude --effort ' + cur + ')' : 'How hard the worker thinks — whatever claude does on its own';
+    chatEffort.classList.toggle('set', Boolean(cur));
+    chatEffort._menu.querySelectorAll('.it').forEach((it) => { const on = (it.dataset.effort || '') === cur; it.setAttribute('aria-selected', String(on)); it.querySelector('.ck').innerHTML = on ? '&#10003;' : ''; });
+  }
+  // Same deal as the model: the running process keeps the effort it was spawned with, so the switch
+  // lands on the next one — which resumes the same session.
+  async function pickEffort(id) {
+    setEffortPref(id); effortSync();
+    if (!chatOpen || !chatUi.cur) return;
+    try {
+      const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(chatUi.cur) + '/effort', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ effort: id }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(r.status === 404 ? 'this pinpoint server predates the effort picker; restart it to enable it' : ([j.error, j.hint].filter(Boolean).join(' \u2014 ') || 'HTTP ' + r.status));
+    } catch (e) { chatAppend({ t: 'error', text: 'Could not set the effort: ' + (e && e.message ? e.message : e), at: new Date().toISOString() }); }
+  }
   async function pickModel(id) {
     setModelPref(id); modelSync(); if (modelLine) modelLine();
     if (!chatOpen || !chatUi.cur) return; // from the panel the pick just rides along with Send; only the open drawer switches a conversation in place
@@ -1893,7 +1951,8 @@
     chatUi.cur = id || null; chatSave(); if (AUTO_WORKER) refreshConvoTarget();
     const row = id ? chatConvos.find((c) => c.id === id) : null; // the pill names the model in use here
     if (row && typeof row.model === 'string' && row.model !== modelPref()) { setModelPref(row.model); if (modelLine) modelLine(); }
-    modelSync();
+    if (row && typeof row.effort === 'string' && row.effort !== effortPref()) setEffortPref(row.effort);
+    modelSync(); effortSync();
     if (!chatLs) return;
     chatLs.innerHTML = ''; chatAtBottom = true; selSync();
     if (!id) { chatStatus(null); chatAppend({ t: 'error', text: '' }); chatLs.innerHTML = ''; const d = el('div', 'm status'); d.innerHTML = 'A message here starts a new worker for this page (sent as a general note). Pins you place while the drawer is open are listed above the box and go out with it.'; chatLs.append(d); return; }
@@ -1934,7 +1993,7 @@
     const consumePins = () => { if (pins.length) { state.pins = []; save(); closePop(); } };
     try {
       if (chatUi.cur) {
-        const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(chatUi.cur), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, images, pins, model: modelPref() }) });
+        const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(chatUi.cur), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, images, pins, model: modelPref(), effort: effortPref() }) });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error([j.error, j.hint].filter(Boolean).join(' — ') || String(r.status));
         if (pins.length) {
@@ -1942,7 +2001,7 @@
           else chatAppend({ t: 'error', text: 'Message sent, but this pinpoint server ignored the pins — restart it (they are still listed above).', at: new Date().toISOString() });
         }
       } else {
-        const body = { page: location.href, title: document.title, viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio }, state: appState(), general: text || (pins.length ? '' : 'See the attached screenshot.'), pins, images, to: 'worker', model: modelPref() };
+        const body = { page: location.href, title: document.title, viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio }, state: appState(), general: text || (pins.length ? '' : 'See the attached screenshot.'), pins, images, to: 'worker', model: modelPref(), effort: effortPref() };
         const r = await fetch(API + BRAND.api, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error([j.error, j.hint].filter(Boolean).join(' — ') || String(r.status));

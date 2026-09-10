@@ -165,6 +165,7 @@ PINPOINT_DETACHED=1 PINPOINT_ROLE=http nohup bun run pinpoint serve > .docs/pinp
     "mcp": "pinpoint",          // "all" loads every user MCP
     "args": [],                 // extra claude flags
     "model": "",                // preselects the model pill ("" = whatever claude is set to)
+    "effort": "",               // preselects the effort pill: low | medium | high | xhigh | max ("" = whatever claude does)
     "models": []                // replaces the offered list: ["opus", { "id": "fable", "label": "Fable", "note": "most capable" }]
   },
   "updateCheck": true           // optional; false stops the 4-hourly look at the package repo's tags for a newer pinpoint

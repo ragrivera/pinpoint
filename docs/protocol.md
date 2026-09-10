@@ -14,6 +14,7 @@ project root (the directory holding `.pinpoint.json`).
 .docs/pinpoint/workers/<id>.json        worker record: state, session uuid, turns, cost
 .docs/pinpoint/workers/<id>.chat.jsonl  the worker's transcript (one event per line)
 .docs/pinpoint/workers/<id>/img-*.png   screenshots sent from the drawer
+.docs/pinpoint/workers/<id>/file-*.*    any other attachment (logs, CSVs, PDFs, source files)
 .docs/pinpoint/workers/mcp.json         the MCP config workers are started with
 ```
 
@@ -34,7 +35,7 @@ Posted by the overlay, persisted verbatim plus `id`, `receivedAt`, `to`, and lat
   "general": "The whole card feels cramped.",          // optional note for the page (pin 0)
   "to": "12345" | "any" | "" | "w3k9ab",               // session id, any handler, or the worker id
   "claimedBy": "12345",                                // set when claimed
-  "images": [".docs/pinpoint/workers/<id>/img-….png"], // screenshots attached at send time
+  "images": [".docs/pinpoint/workers/<id>/img-….png"], // attachments at send time; images travel inline to the model, anything else only as a path it can Read
   "pins": [
     {
       "type": "bug" | "layout" | "copy" | "idea" | "question" | "",
@@ -76,12 +77,13 @@ All `/api/*` routes check `Origin`: allowed are the origins in `.pinpoint.json` 
 | `GET /api/skills` | skills + commands a worker can run (`~/.claude` and `<root>/.claude`, plus `/clear`, `/compact`) |
 | `GET /api/chat` | worker conversations, newest first (each with its Claude `session` id and `model`) |
 | `GET /api/chat/:id/events` | SSE: transcript replay, then live events |
-| `POST /api/chat/:id` | `{ text?, images?, pins?, model? }` → to the worker (`model` switches it first, same as the route below) (pins are appended to the batch, numbered on; a `/clear` text empties the batch's pins so the next ones start at #1 again) |
+| `POST /api/chat/:id` | `{ text?, images?, pins?, model?, effort? }` → to the worker (`model` / `effort` switch it first, same as the routes below) (pins are appended to the batch, numbered on; a `/clear` text empties the batch's pins so the next ones start at #1 again) |
 | `POST /api/chat/:id/stop` | end the worker process (a later message resumes the session) |
 | `POST /api/chat/:id/model` | `{ model }` → `{ ok, model, state }`; `400` (with the offered `models`) for anything outside the list. The live process keeps the model it was spawned with, so the switch lands on the next one — ended right away when the worker is quiet, after the current turn otherwise; the resume keeps the same Claude session |
 | `POST /api/chat/:id/handoff` | continue in a terminal: end the worker (if running) and note it in the transcript as a `status` with `handoff: true` + the command; returns `{ ok, command, cwd, session }` (the overlay builds the same `cd <root> && claude --resume <session>` from `/api/health` + the row's `session` and puts it on the clipboard rather than showing it) |
 | `POST /api/chat/:id/close` | end the worker (if running) and drop the conversation from `/api/chat`; its record parks as `<id>.json.closed`, transcript + images stay |
-| `GET /api/chat/:id/img/:file` | a screenshot from the transcript |
+| `GET /api/chat/:id/img/:file` | a screenshot or attachment from the transcript |
+| `POST /api/chat/:id/effort` | `{ effort }` → `claude --effort` for this conversation (low / medium / high / xhigh / max, `""` for the CLI's own); the running process keeps what it was spawned with, so the switch lands on the next one |
 | `GET /flutter` | the Flutter capture panel (served with the overlay `<script>` injected) |
 | `GET /api/flutter/events` | SSE: replay `{t:'client'}` + unsent taps, then live bus events |
 | `POST /api/flutter/taps` | a tap from `pinpoint flutter`: `{ widget?, source: {file, line, column}, rect?, screenshot?: {type, data} }` → `{ ok, n }`; screenshots ≤ ~2 MB decoded |

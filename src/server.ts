@@ -59,7 +59,7 @@ import { findProject as findProjectFile } from './config.js';
 import pkg from '../package.json';
 
 type ModelOpt = { id: string; label: string; note?: string };
-type WorkerCfg = { idleMinutes?: number; mcp?: 'pinpoint' | 'all'; args?: string[]; model?: string; models?: Array<string | Partial<ModelOpt>>; recapOnIdle?: boolean };
+type WorkerCfg = { idleMinutes?: number; mcp?: 'pinpoint' | 'all'; args?: string[]; model?: string; models?: Array<string | Partial<ModelOpt>>; effort?: string; recapOnIdle?: boolean };
 type Project = { root: string; port?: number; name?: string; file?: string; dispatch?: 'worker' | 'session'; claudeBin?: string; worker?: WorkerCfg; origins: string[]; updateCheck?: boolean };
 function findProject(from: string): Project {
   const { root, file, config: j } = findProjectFile(from);
@@ -123,6 +123,20 @@ const MODELS: ModelOpt[] = (() => {
     .filter((m, i, all) => all.findIndex((x) => x.id === m.id) === i);
   return list.some((m) => m.id === '') ? list : [ANY_MODEL, ...list];
 })();
+// How hard the worker thinks (`claude --effort`). The CLI takes low | medium | high | xhigh | max;
+// '' leaves it alone. Unlike the model, the CLI never reports the effort it settled on, so the pill
+// can only name what was picked here — "Default" means whatever claude does on its own.
+const EFFORTS: ModelOpt[] = [
+  { id: '', label: 'Default', note: 'whatever claude does on its own' },
+  { id: 'low', label: 'Low', note: 'least thinking, cheapest' },
+  { id: 'medium', label: 'Medium', note: 'balanced' },
+  { id: 'high', label: 'High', note: 'more thinking on hard steps' },
+  { id: 'xhigh', label: 'X-High', note: 'harder still' },
+  { id: 'max', label: 'Max', note: 'think as long as it takes' },
+];
+const isEffort = (id: string) => EFFORTS.some((e) => e.id === id);
+const effortIds = () => EFFORTS.map((e) => e.id || '(default)').join(', ');
+const DEFAULT_EFFORT = typeof PROJECT.worker?.effort === 'string' && isEffort(PROJECT.worker.effort) ? PROJECT.worker.effort : '';
 const isModel = (id: string) => MODELS.some((m) => m.id === id);
 const modelIds = () => MODELS.map((m) => m.id || '(default)').join(', ');
 const DEFAULT_MODEL = typeof PROJECT.worker?.model === 'string' && isModel(PROJECT.worker.model) ? PROJECT.worker.model : '';
@@ -136,7 +150,7 @@ const LOOK_FILE = join(ROOT, '.docs', 'pinpoint', 'look.json');
 const LOOK_MAX = 64_000;
 const savedLook = (): unknown => { try { return JSON.parse(readFileSync(LOOK_FILE, 'utf8')); } catch { return null; } };
 const WORKER_MCP_CFG = join(WORKERS_DIR, 'mcp.json');
-const BRAND = { name: 'Pinpoint', key: 'pinpoint', api: '/api/pins', sessions: '/api/sessions', chat: '/api/chat', dispatch: DISPATCH, server: 'pinpoint', port: PORT, requiredSession: STRICT ? REQUIRED_SESSION : null, models: MODELS, model: DEFAULT_MODEL, idleMinutes: WORKER_IDLE_MS / 60_000, recapOnIdle: RECAP_ON_IDLE };
+const BRAND = { name: 'Pinpoint', key: 'pinpoint', api: '/api/pins', sessions: '/api/sessions', chat: '/api/chat', dispatch: DISPATCH, server: 'pinpoint', port: PORT, requiredSession: STRICT ? REQUIRED_SESSION : null, models: MODELS, model: DEFAULT_MODEL, efforts: EFFORTS, effort: DEFAULT_EFFORT, idleMinutes: WORKER_IDLE_MS / 60_000, recapOnIdle: RECAP_ON_IDLE };
 
 // ─── Update check ─────────────────────────────────────────────────────────────
 // So people notice a newer pinpoint: at most once every 4 hours — on owner start and whenever a worker
@@ -271,7 +285,7 @@ const log = (...a: unknown[]) => console.error('[pinpoint]', ...a); // stderr �
 // ─── Pin store: the directory is the source of truth, shared by every session ──
 type PinStatus = 'working' | 'done' | 'skipped' | 'question';
 type Progress = Record<string, { status: PinStatus; note?: string; at: string; by?: string }>;
-type Batch = { id: string; receivedAt: string; page: string; title: string; general: string; pins: unknown[]; state?: unknown; viewport?: unknown; to?: string; model?: string; claimedBy?: string; progress?: Progress };
+type Batch = { id: string; receivedAt: string; page: string; title: string; general: string; pins: unknown[]; state?: unknown; viewport?: unknown; to?: string; model?: string; effort?: string; claimedBy?: string; progress?: Progress };
 const CLAIMED = /\.claimed-([^.]+)\.json$/;
 // Batch files: <id>.json / <id>.claimed-<who>.json (nothing else belongs in feedback/).
 const isBatchFile = (n: string) => n.endsWith('.json') && !n.startsWith('_');
@@ -290,6 +304,8 @@ function receive(input: Omit<Batch, 'id' | 'receivedAt'> & { images?: unknown })
   const toRaw = (body.to || '').trim();
   const model = String(body.model ?? DEFAULT_MODEL).trim(); // req.json() is unvalidated: a non-string must 400, not throw
   if (!isModel(model)) throw new PinError(400, `Unknown model ${model}`, `This server offers: ${modelIds()} — add others to worker.models in .pinpoint.json.`);
+  const effort = String(body.effort ?? DEFAULT_EFFORT).trim();
+  if (!isEffort(effort)) throw new PinError(400, `Unknown effort ${effort}`, `This server offers: ${effortIds()}.`);
   const explicitSession = Boolean(toRaw) && toRaw !== 'any' && toRaw !== 'worker';
   const wantsWorker = toRaw === 'worker' || (!explicitSession && DISPATCH === 'worker');
   if (STRICT && explicitSession && !handlers().some((x) => x.id === toRaw)) throw new PinError(409, `Session ${toRaw} is not a live ${REQUIRED_SESSION} handler`, `Open the To: picker and choose a listed session (or the headless worker).`);
@@ -303,10 +319,10 @@ function receive(input: Omit<Batch, 'id' | 'receivedAt'> & { images?: unknown })
     // Pre-claimed for the worker: it reads the batch by id (get_pins { id }) and reports
     // through report_pin, so nothing else may claim it and the overlay never shows "waiting".
     const workerId = 'w' + Math.random().toString(36).slice(2, 8);
-    const { refs, blocks } = saveImages(id, images);
+    const { refs, blocks } = saveFiles(id, images);
     const b: Batch & { images?: string[] } = { id, receivedAt: ts.toISOString(), ...body, to: workerId, claimedBy: workerId, ...(refs.length ? { images: refs.map((r) => r.file) } : {}) };
     writeFileSync(join(FEEDBACK_DIR, `${id}.claimed-${workerId}.json`), JSON.stringify(b, null, 2));
-    const w = new Worker({ batchId: id, workerId, sessionUuid: crypto.randomUUID(), page: b.page, title: b.title, state: 'starting', started: false, startedAt: ts.toISOString(), lastAt: ts.toISOString(), turns: 0, costUsd: 0, model });
+    const w = new Worker({ batchId: id, workerId, sessionUuid: crypto.randomUUID(), page: b.page, title: b.title, state: 'starting', started: false, startedAt: ts.toISOString(), lastAt: ts.toISOString(), turns: 0, costUsd: 0, model, effort });
     workers.set(id, w);
     w.emit({ t: 'batch', pins: b.pins.length, general: b.general || '', page: b.page, title: b.title, images: publicRefs(refs) });
     w.sendRaw(withImages(batchPrompt(b), refs, blocks));
@@ -314,7 +330,7 @@ function receive(input: Omit<Batch, 'id' | 'receivedAt'> & { images?: unknown })
     if (flutterPage(b.page)) flutterBus.emit({ t: 'sent', id, pins: b.pins.length }); // `pinpoint flutter` polls the batch and hot-reloads on completion
     return { ...b, worker: true };
   }
-  const { refs } = saveImages(id, images); // a session reads them with its Read tool
+  const { refs } = saveFiles(id, images); // a session reads them with its Read tool
   const b: Batch & { images?: string[] } = { id, receivedAt: ts.toISOString(), ...body, to: explicitSession ? toRaw : defaultTarget(), ...(refs.length ? { images: refs.map((r) => r.file) } : {}) };
   writeFileSync(join(FEEDBACK_DIR, `${id}.json`), JSON.stringify(b, null, 2));
   log('pins received', id, `${b.pins.length} pin(s)`, `→ session ${b.to || 'any'}`);
@@ -431,7 +447,7 @@ function listSkills(): SkillRow[] {
 
 // ─── Workers: one headless Claude per batch, chat over its stdin/stdout ────────
 type WState = 'starting' | 'working' | 'idle' | 'exited' | 'error';
-type WorkerRec = { batchId: string; workerId: string; sessionUuid: string; page: string; title: string; state: WState; started: boolean; startedAt: string; lastAt: string; turns: number; costUsd: number; model?: string; exitCode?: number | null };
+type WorkerRec = { batchId: string; workerId: string; sessionUuid: string; page: string; title: string; state: WState; started: boolean; startedAt: string; lastAt: string; turns: number; costUsd: number; model?: string; effort?: string; exitCode?: number | null };
 type ChatEvent = { t: string; at: string; [k: string]: unknown };
 const workers = new Map<string, Worker>();
 const rel = (p: unknown) => (typeof p === 'string' ? p.replace(ROOT + '/', '') : '');
@@ -527,27 +543,41 @@ function followUpPrompt(text: string, id: string, a: PinAppend): string {
 // Screenshots from the drawer: saved under workers/<batch>/img-*.ext (served back at
 // /api/chat/:id/img/<file> for the transcript) and handed to the worker as inline image
 // blocks, with the saved path in the text so it can Read the file if it needs to zoom.
-type ImgRef = { url: string; name: string; type: string; bytes: number; file: string };
+type ImgRef = { url: string; name: string; type: string; bytes: number; file: string; img?: boolean };
 type UserContent = string | Array<Record<string, unknown>>;
 const IMG_EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
-function saveImages(batchId: string, raw: unknown): { refs: ImgRef[]; blocks: Array<Record<string, unknown>> } {
+// A screenshot travels inline as an image block, because that is the only way the model can look at
+// it. Anything else — a log, a CSV, a PDF, a .tsx — is written beside the transcript and named in the
+// prompt: the worker has Read, so a path costs nothing and keeps a 3 MB file out of the context.
+const safeExt = (name: string) => { const m = /\.([A-Za-z0-9]{1,8})$/.exec(name || ''); return m ? m[1].toLowerCase() : 'bin'; };
+function saveFiles(batchId: string, raw: unknown): { refs: ImgRef[]; blocks: Array<Record<string, unknown>> } {
   const list = Array.isArray(raw) ? raw.slice(0, 6) : [];
   const dir = join(WORKERS_DIR, batchId); const refs: ImgRef[] = []; const blocks: Array<Record<string, unknown>> = [];
   list.forEach((im: any, i: number) => {
     const type = String(im?.type || ''); const data = String(im?.data || '').replace(/^data:[^,]*,/, '');
-    if (!IMG_EXT[type] || !data || data.length > 8_000_000) return; // ~6 MB decoded
+    if (!data || data.length > 8_000_000) return; // ~6 MB decoded, image or not
+    const name = String(im?.name || '').slice(0, 80);
+    const img = Boolean(IMG_EXT[type]);
     mkdirSync(dir, { recursive: true });
-    const file = `img-${Date.now()}-${i}.${IMG_EXT[type]}`; const bytes = Buffer.from(data, 'base64');
+    const file = `${img ? 'img' : 'file'}-${Date.now()}-${i}.${img ? IMG_EXT[type] : safeExt(name)}`;
+    const bytes = Buffer.from(data, 'base64');
     writeFileSync(join(dir, file), bytes);
-    refs.push({ url: `/api/chat/${encodeURIComponent(batchId)}/img/${file}`, name: String(im?.name || file).slice(0, 80), type, bytes: bytes.length, file: join(dir, file) });
-    blocks.push({ type: 'image', source: { type: 'base64', media_type: type, data } });
+    refs.push({ url: `/api/chat/${encodeURIComponent(batchId)}/img/${file}`, name: name || file, type, bytes: bytes.length, file: join(dir, file), img });
+    if (img) blocks.push({ type: 'image', source: { type: 'base64', media_type: type, data } });
   });
   return { refs, blocks };
 }
-const withImages = (text: string, refs: ImgRef[], blocks: Array<Record<string, unknown>>): UserContent => refs.length
-  ? [{ type: 'text', text: `${text}\n\n(${refs.length} screenshot${refs.length === 1 ? '' : 's'} attached inline; also saved at: ${refs.map((r) => r.file).join(', ')} — Read a path if you need to zoom in.)` }, ...blocks]
-  : text;
-const publicRefs = (refs: ImgRef[]) => refs.map(({ url, name, type, bytes }) => ({ url, name, type, bytes }));
+const withImages = (text: string, refs: ImgRef[], blocks: Array<Record<string, unknown>>): UserContent => {
+  if (!refs.length) return text;
+  const shots = refs.filter((r) => r.img !== false && IMG_EXT[r.type]);
+  const files = refs.filter((r) => !shots.includes(r));
+  const notes = [
+    shots.length ? `${shots.length} screenshot${shots.length === 1 ? '' : 's'} attached inline; also saved at: ${shots.map((r) => r.file).join(', ')} — Read a path if you need to zoom in.` : '',
+    files.length ? `${files.length} file${files.length === 1 ? '' : 's'} attached, saved at: ${files.map((r) => `${r.file} (${r.name})`).join(', ')} — Read them.` : '',
+  ].filter(Boolean);
+  return [{ type: 'text', text: `${text}\n\n(${notes.join(' ')})` }, ...blocks];
+};
+const publicRefs = (refs: ImgRef[]) => refs.map(({ url, name, type, bytes, img }) => ({ url, name, type, bytes, img: img !== false && Boolean(IMG_EXT[type]) }));
 class Worker {
   proc: ReturnType<typeof Bun.spawn> | null = null;
   private announced = false; // "worker ready" once per process, not once per turn
@@ -557,6 +587,7 @@ class Worker {
   private killTimer: ReturnType<typeof setTimeout> | null = null;
   private stopping = false; // stdin already closed: the exit is on its way, do not ask twice
   private spawnedModel = ''; // the --model this process actually started with
+  private spawnedEffort = ''; // ditto --effort: both only change on a restart
   private inflight = 0; // messages written but not yet answered — never end a process holding one
   private queue: UserContent[] = [];
   closed = false; // closed from the picker: the record parks as <id>.json.closed so loadWorkers() skips it; transcript + images stay
@@ -575,7 +606,7 @@ class Worker {
   /** Reviewer message (+ screenshots, + pins already appended to this batch): echoed to the transcript, then fed to the worker (spawning / resuming it if needed). */
   send(text: string, images?: unknown, pins?: PinAppend) {
     this.recapAsked = false; // a real message: this conversation earns another recap when it next goes quiet
-    const { refs, blocks } = saveImages(this.rec.batchId, images);
+    const { refs, blocks } = saveFiles(this.rec.batchId, images);
     const withPins = Boolean(pins && pins.count > 0);
     this.emit({ t: 'user', text, images: publicRefs(refs), ...(withPins ? { pins: { first: pins!.first, count: pins!.count } } : {}) });
     this.sendRaw(withImages(withPins ? followUpPrompt(text, this.rec.batchId, pins!) : text, refs, blocks));
@@ -585,7 +616,7 @@ class Worker {
     // A model change lands on the next process: queue the message, end this one, and let the
     // exit handler resume the same Claude session with the new --model. Only while nothing is in
     // flight — a turn in progress (or a message already handed over) is never thrown away.
-    if (this.proc && this.spawnedModel !== (this.rec.model || '') && !this.inflight) { this.queue.push(content); this.stop('model change'); return; }
+    if (this.proc && this.stalePicks() && !this.inflight) { this.queue.push(content); this.stop(this.spawnedModel === (this.rec.model || '') ? 'effort change' : 'model change'); return; }
     if (!this.proc) { this.queue.push(content); this.start(this.rec.started); return; }
     if (this.rec.state !== 'working') this.setState('working');
     this.write(content);
@@ -604,6 +635,8 @@ class Worker {
     if (WORKER_MCP === 'pinpoint') { writeWorkerMcpCfg(); args.push('--strict-mcp-config', '--mcp-config', WORKER_MCP_CFG); }
     this.spawnedModel = this.rec.model || '';
     if (this.spawnedModel) args.push('--model', this.spawnedModel);
+    this.spawnedEffort = this.rec.effort || '';
+    if (this.spawnedEffort) args.push('--effort', this.spawnedEffort);
     args.push(...WORKER_ARGS);
     try {
       this.proc = Bun.spawn(args, {
@@ -668,7 +701,7 @@ class Worker {
         this.emit({ t: 'result', ok: !m.is_error, subtype: m.subtype, ms: m.duration_ms, cost: m.total_cost_usd, turns: m.num_turns, text: m.is_error ? String(m.result || m.error || 'error') : '' });
         this.setState('idle');
         if (this.recapAsked) this.stop('idle timeout'); else this.armIdle(); // the recap was the last turn
-        this.applyModel(); // picked mid-turn: end the process now so the next message starts on it
+        this.applyPicks(); // picked mid-turn: end the process now so the next message starts on it
         break;
       default: break; // hooks, rate limits, partials
     }
@@ -694,13 +727,24 @@ class Worker {
     this.rec.model = next; this.saveRec();
     this.emit({ t: 'status', state: this.rec.state, model: next, modelSet: true });
     log(`worker ${this.rec.workerId} model → ${next || '(default)'}`);
-    this.applyModel();
+    this.applyPicks();
   }
-  /** End an idle process whose model is stale, so the restart cost is paid while the reviewer types
-   *  rather than after they hit send. Mid-turn work is never interrupted: `result` calls this again. */
-  private applyModel() {
-    if (!this.proc || this.spawnedModel === (this.rec.model || '') || this.inflight) return;
-    this.stop('model change');
+  /** How hard it thinks. Same deal as the model: the live process keeps what it was spawned with. */
+  setEffort(effort: string) {
+    const next = (effort || '').trim();
+    if (!isEffort(next)) throw new PinError(400, `Unknown effort ${next}`, `This server offers: ${effortIds()}.`);
+    if ((this.rec.effort || '') === next) return;
+    this.rec.effort = next; this.saveRec();
+    this.emit({ t: 'status', state: this.rec.state, effort: next, effortSet: true });
+    log(`worker ${this.rec.workerId} effort → ${next || '(default)'}`);
+    this.applyPicks();
+  }
+  private stalePicks() { return this.spawnedModel !== (this.rec.model || '') || this.spawnedEffort !== (this.rec.effort || ''); }
+  /** End an idle process whose model or effort is stale, so the restart cost is paid while the reviewer
+   *  types rather than after they hit send. Mid-turn work is never interrupted: `result` calls this again. */
+  private applyPicks() {
+    if (!this.proc || !this.stalePicks() || this.inflight) return;
+    this.stop(this.spawnedModel === (this.rec.model || '') ? 'effort change' : 'model change');
   }
   /** Close stdin so Claude ends the conversation; a later message resumes it by session id. */
   stop(reason: string) {
@@ -750,7 +794,7 @@ function listChats() {
   return [...workers.values()].sort((a, b) => (a.rec.lastAt < b.rec.lastAt ? 1 : -1)).map((w) => {
     let pins = 0, general = '';
     try { const f = findSaved(w.rec.batchId); if (f) { const b = JSON.parse(readFileSync(f, 'utf8')) as Batch; pins = b.pins.length; general = (b.general || '').slice(0, 120); } } catch {}
-    return { id: w.rec.batchId, page: w.rec.page, title: w.rec.title, state: w.rec.state, session: w.rec.sessionUuid, model: w.rec.model || '', startedAt: w.rec.startedAt, lastAt: w.rec.lastAt, turns: w.rec.turns, costUsd: Math.round(w.rec.costUsd * 1000) / 1000, pins, general };
+    return { id: w.rec.batchId, page: w.rec.page, title: w.rec.title, state: w.rec.state, session: w.rec.sessionUuid, model: w.rec.model || '', effort: w.rec.effort || '', startedAt: w.rec.startedAt, lastAt: w.rec.lastAt, turns: w.rec.turns, costUsd: Math.round(w.rec.costUsd * 1000) / 1000, pins, general };
   });
 }
 function sse(w: Worker, req: Request, headers: Record<string, string>) {
@@ -833,7 +877,7 @@ try {
         flutterBus.emit({ t: 'cleared' });
         return Response.json({ ok: true }, { headers: CORS });
       }
-      if (url.pathname === '/api/health') return Response.json({ ok: true, root: ROOT, port: PORT, project: PROJECT.file ?? null, name: PROJECT_NAME, dispatch: DISPATCH, claudeBin: CLAUDE_BIN, requiredSession: STRICT ? REQUIRED_SESSION : null, feedbackDir: FEEDBACK_DIR, model: DEFAULT_MODEL, models: MODELS, sessions: liveSessions().length, handlers: handlers().length, workers: [...workers.values()].filter((w) => w.proc).length, update }, { headers: CORS });
+      if (url.pathname === '/api/health') return Response.json({ ok: true, root: ROOT, port: PORT, project: PROJECT.file ?? null, name: PROJECT_NAME, dispatch: DISPATCH, claudeBin: CLAUDE_BIN, requiredSession: STRICT ? REQUIRED_SESSION : null, feedbackDir: FEEDBACK_DIR, model: DEFAULT_MODEL, models: MODELS, effort: DEFAULT_EFFORT, efforts: EFFORTS, sessions: liveSessions().length, handlers: handlers().length, workers: [...workers.values()].filter((w) => w.proc).length, update }, { headers: CORS });
       if (url.pathname === '/api/skills' && req.method === 'GET') return Response.json(listSkills(), { headers: CORS });
       if (url.pathname === '/api/look') {
         if (req.method === 'GET') return Response.json(savedLook() ?? {}, { headers: CORS });
@@ -860,7 +904,7 @@ try {
         return Response.json({ ok: true }, { headers: CORS });
       }
       if (url.pathname === '/api/chat' && req.method === 'GET') return Response.json(listChats(), { headers: CORS });
-      const cm = /^\/api\/chat\/([^/]+)(?:\/(events|stop|close|handoff|model)|\/img\/([^/]+))?$/.exec(url.pathname);
+      const cm = /^\/api\/chat\/([^/]+)(?:\/(events|stop|close|handoff|model|effort)|\/img\/([^/]+))?$/.exec(url.pathname);
       if (cm) {
         const id = decodeURIComponent(cm[1]);
         const w = workers.get(id);
@@ -868,8 +912,12 @@ try {
         if (cm[3] && req.method === 'GET') {
           const file = basename(decodeURIComponent(cm[3]));
           const path = join(WORKERS_DIR, id, file);
-          if (!/^img-[\w.-]+$/.test(file) || !existsSync(path)) return new Response('not found', { status: 404, headers: CORS });
-          return new Response(Bun.file(path), { headers: { ...CORS, 'Cache-Control': 'private, max-age=86400' } });
+          if (!/^(img|file)-[\w.-]+$/.test(file) || !existsSync(path)) return new Response('not found', { status: 404, headers: CORS });
+          // A screenshot renders in an <img>; anything else is handed back as a download. Serving an
+          // attached .html or .svg with its own content type would run the reviewer's file as script
+          // on this origin — the one the overlay and the API live on.
+          const asFile = !file.startsWith('img-');
+          return new Response(Bun.file(path), { headers: { ...CORS, 'Cache-Control': 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff', ...(asFile ? { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="${file}"` } : {}) } });
         }
         if (cm[2] === 'events' && req.method === 'GET') return sse(w, req, CORS);
         if (cm[2] === 'stop' && req.method === 'POST') { w.stop('stopped from the overlay'); return Response.json({ ok: true }, { headers: CORS }); }
@@ -880,6 +928,11 @@ try {
           try { w.setModel(String(j?.model ?? '')); return Response.json({ ok: true, model: w.rec.model || '', state: w.rec.state }, { headers: CORS }); }
           catch (e: any) { const st = e instanceof PinError ? e.status : 500; return Response.json({ ok: false, error: String(e?.message || e), hint: e?.hint ?? null, models: MODELS }, { status: st, headers: CORS }); }
         }
+        if (cm[2] === 'effort' && req.method === 'POST') {
+          const j = await req.json().catch(() => ({}));
+          try { w.setEffort(String(j?.effort ?? '')); return Response.json({ ok: true, effort: w.rec.effort || '', state: w.rec.state }, { headers: CORS }); }
+          catch (e: any) { const st = e instanceof PinError ? e.status : 500; return Response.json({ ok: false, error: String(e?.message || e), hint: e?.hint ?? null, efforts: EFFORTS }, { status: st, headers: CORS }); }
+        }
         if (!cm[2] && req.method === 'POST') {
           const j = await req.json().catch(() => ({}));
           const text = String(j?.text ?? '').trim();
@@ -888,6 +941,7 @@ try {
           if (!text && !hasImages && !hasPins) return Response.json({ error: 'text, images or pins required' }, { status: 400, headers: CORS });
           try {
             if (typeof j?.model === 'string') w.setModel(j.model); // the pill moved while the message was being typed
+            if (typeof j?.effort === 'string') w.setEffort(j.effort);
             const added = appendPins(id, j?.pins); // pins from the drawer join this batch before the worker hears about them
             w.send((text || (added.count ? 'See the new pins.' : 'See the attached screenshot.')).slice(0, 20_000), j?.images, added);
             return Response.json({ ok: true, state: w.rec.state, pins: added.count, total: added.total }, { headers: CORS });
