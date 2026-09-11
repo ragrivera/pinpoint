@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.8.0] - 2026-09-11
 
 ### Features
 - ✨ Links in a worker's reply are clickable: `[label](https://…)` and bare `http(s)://` URLs open in

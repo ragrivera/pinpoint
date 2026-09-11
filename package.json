@@ -1,6 +1,6 @@
 {
   "name": "pinpoint-live",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Pin elements on your running React app, send them to Claude Code, and get the source fixed in place — with a headless worker and a chat drawer per batch.",
   "type": "module",
   "license": "MIT",
