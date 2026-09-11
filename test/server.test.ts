@@ -10,6 +10,7 @@ let upstream: ReturnType<typeof tmpProject>; // a fake package repo with version
 let owner: ReturnType<typeof Bun.spawn>;
 let base: string;
 const feedback = () => join(project.root, '.docs', 'pinpoint', 'feedback');
+const openStub = () => join(project.root, 'open-stub.sh'); // stands in for `open` so /api/reveal never touches Finder; appends its argv to open-stub.sh.log
 const post = (path: string, body: unknown, origin?: string) => fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(origin ? { Origin: origin } : {}) }, body: JSON.stringify(body) });
 const batch = (to = '') => ({ page: `${APP_ORIGIN}/settings/profile`, title: 'Settings', viewport: { w: 1440, h: 900, dpr: 2 }, general: '', pins: [{ type: 'bug', comment: 'overlaps', rect: { x: 1, y: 2, w: 3, h: 4 }, element: { tag: 'button', path: 'main > button', text: 'Save' } }], to });
 
@@ -23,10 +24,11 @@ beforeAll(async () => {
     '.docs/pinpoint/workers/model-batch.json': JSON.stringify({ batchId: 'model-batch', workerId: 'w2', sessionUuid: '00000000-0000-0000-0000-000000000002', page: `${APP_ORIGIN}/home`, title: 'Home', state: 'exited', started: true, startedAt: '2026-01-01T00:00:00.000Z', lastAt: '2026-01-01T00:00:00.000Z', turns: 1, costUsd: 0 }),
   });
   base = `http://127.0.0.1:${port}`;
+  writeFileSync(openStub(), '#!/bin/sh\nprintf "%s\\n" "$@" >> "$0.log"\n', { mode: 0o755 });
   upstream = tmpProject({ 'README.md': 'pinpoint' });
   const git = (...a: string[]) => { const r = Bun.spawnSync(['git', '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...a], { cwd: upstream.root }); if (r.exitCode !== 0) throw new Error(r.stderr.toString()); };
   git('init', '-q'); git('add', '-A'); git('commit', '-q', '-m', 'init'); git('tag', 'v0.1.0'); git('tag', 'v9.9.9'); git('tag', 'not-a-version');
-  owner = Bun.spawn(['bun', BIN, 'serve'], { cwd: project.root, env: cleanEnv({ PINPOINT_ROOT: project.root, PINPOINT_ROLE: 'http', PINPOINT_DETACHED: '1', PINPOINT_UPDATE_REPO: upstream.root }), stdout: 'ignore', stderr: 'pipe' });
+  owner = Bun.spawn(['bun', BIN, 'serve'], { cwd: project.root, env: cleanEnv({ PINPOINT_ROOT: project.root, PINPOINT_ROLE: 'http', PINPOINT_DETACHED: '1', PINPOINT_UPDATE_REPO: upstream.root, PINPOINT_OPEN: openStub() }), stdout: 'ignore', stderr: 'pipe' });
   await waitFor(async () => (await fetch(base + '/api/health')).ok, 15000);
 }, 20000);
 afterAll(() => { try { owner.kill(); } catch {} project.rm(); upstream.rm(); });
@@ -411,6 +413,36 @@ describe('Look', () => {
   });
   test('rejects a foreign browser origin like every other route', async () => {
     expect((await post('/api/look', { look: { tint: '#000000' } }, 'http://evil.example')).status).toBe(403);
+  });
+});
+
+// A path chip in the drawer posts here. The opener is the stub above, so the suite asserts on its argv log.
+describe('POST /api/reveal', () => {
+  const opened = () => (existsSync(openStub() + '.log') ? readFileSync(openStub() + '.log', 'utf8') : '');
+  test('needs a string path', async () => {
+    expect((await post('/api/reveal', {}, APP_ORIGIN)).status).toBe(400);
+    expect((await post('/api/reveal', { path: 7 }, APP_ORIGIN)).status).toBe(400);
+  });
+  test('404 when nothing is at the path, and nothing is opened', async () => {
+    const r = await post('/api/reveal', { path: 'nope/missing.ts' }, APP_ORIGIN);
+    expect(r.status).toBe(404);
+    expect((await r.json()).path).toBe(join(project.root, 'nope', 'missing.ts'));
+    expect(opened()).not.toContain('missing.ts');
+  });
+  test('a project-relative path resolves under the root and reaches the opener as -R <path>', async () => {
+    const r = await post('/api/reveal', { path: '.pinpoint.json' }, APP_ORIGIN);
+    expect(r.status).toBe(200);
+    expect((await r.json()).path).toBe(join(project.root, '.pinpoint.json'));
+    await waitFor(async () => opened().includes(join(project.root, '.pinpoint.json')));
+    expect(opened()).toContain('-R\n' + join(project.root, '.pinpoint.json') + '\n');
+  });
+  test("~ is the server user's home", async () => {
+    const r = await post('/api/reveal', { path: '~' }, APP_ORIGIN);
+    expect(r.status).toBe(200);
+    expect((await r.json()).path).toBe(process.env.HOME);
+  });
+  test('rejects a foreign browser origin like every other route', async () => {
+    expect((await post('/api/reveal', { path: '.pinpoint.json' }, 'http://evil.example')).status).toBe(403);
   });
 });
 

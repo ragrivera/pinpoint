@@ -10,6 +10,12 @@ All notable changes to this project will be documented in this file.
   `code` spans, and not inside a question's choice buttons — a link inside a button would be two
   controls in one (overlay)
 
+- ✨ A file path in a worker's reply reveals itself in Finder. A `code` span that reads as a path (one
+  token with a slash, no scheme, an optional `:line`) and, in prose, a path under `~`, `/Users`,
+  `/private`, `/tmp` or `/Volumes` become chips; a click or Enter posts it to `POST /api/reveal`, which
+  resolves `~` and project-relative paths and runs `open -R` — macOS only, `PINPOINT_OPEN` names another
+  opener. Nothing at that path shows on the chip for a moment (overlay, server)
+
 ### Changed
 - 💄 A non-image attachment is a file tile — the extension (a file glyph when there is none) over
   the name clamped to two lines — the same square as a screenshot thumbnail, in the composer and in
@@ -17,6 +23,10 @@ All notable changes to this project will be documented in this file.
 - 🚸 `/clear` wipes the drawer transcript on replay as well as live, so a reload stays cleared; the
   "conversation cleared" status line and the lone "turn done" of the /clear turn no longer sit on the
   blank slate (overlay)
+
+### Tests
+- ✅ `/api/reveal`: a string path is required, an unknown path is 404 and opens nothing, a project-relative
+  path and `~` resolve and reach the stubbed opener as `-R <path>`, a foreign origin is 403 (server)
 
 ### Fixed
 - 🐛 The update pill's `×` dismisses the pill while its update is running too — it was inert until

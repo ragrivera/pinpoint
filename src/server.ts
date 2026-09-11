@@ -47,6 +47,7 @@
 //       PINPOINT_CLAUDE      path to the claude binary for workers
 //       PINPOINT_DISPATCH    worker | session (overrides .pinpoint.json)
 //       PINPOINT_OVERLAY     path to an alternative overlay script (default: overlay/pinpoint.js)
+//       PINPOINT_OPEN        what POST /api/reveal runs as `<bin> -R <path>` (default: open on macOS; elsewhere unset → 501)
 //
 // Browser access: every /api/* route checks the Origin header against the project's app
 // origins plus localhost / 127.0.0.1 / *.localhost. A worker runs with permission prompts
@@ -1001,6 +1002,21 @@ try {
         const j = await req.json().catch(() => ({}));
         try { const r = startUpdate(String(j?.page || ''), String(j?.title || ''), j?.model, j?.effort); return Response.json({ ok: true, ...r }, { headers: CORS }); }
         catch (e: any) { const st = e instanceof PinError ? e.status : 500; log('update refused', st, e?.message); return Response.json({ ok: false, error: String(e?.message || e), hint: e?.hint ?? null }, { status: st, headers: CORS }); }
+      }
+      // A path chip in the drawer: reveal the file in Finder. `~` is this user's home, a relative path is under the
+      // project; the opener is `open -R` (PINPOINT_OPEN swaps it — the tests stub it), so nothing runs but Finder.
+      if (url.pathname === '/api/reveal' && req.method === 'POST') {
+        const j = await req.json().catch(() => null);
+        const raw = j && typeof j === 'object' && typeof (j as any).path === 'string' ? (j as any).path.trim() : '';
+        if (!raw) return Response.json({ ok: false, error: 'path must be a string' }, { status: 400, headers: CORS });
+        const abs = resolve(ROOT, raw === '~' ? HOME : raw.startsWith('~/') ? join(HOME, raw.slice(2)) : raw);
+        if (!existsSync(abs)) return Response.json({ ok: false, error: 'Nothing at that path', path: abs }, { status: 404, headers: CORS });
+        const opener = process.env.PINPOINT_OPEN || (process.platform === 'darwin' ? 'open' : '');
+        if (!opener) return Response.json({ ok: false, error: 'Reveal needs macOS (open -R), or PINPOINT_OPEN naming an opener' }, { status: 501, headers: CORS });
+        try { Bun.spawn([opener, '-R', abs], { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' }); }
+        catch (e: any) { return Response.json({ ok: false, error: String(e?.message || e) }, { status: 500, headers: CORS }); }
+        log('reveal', abs);
+        return Response.json({ ok: true, path: abs }, { headers: CORS });
       }
       if (url.pathname === '/api/restart' && req.method === 'POST') {
         setTimeout(() => restartSelf('POST /api/restart'), 200); // once this response is out

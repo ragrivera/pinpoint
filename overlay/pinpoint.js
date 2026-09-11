@@ -1286,6 +1286,7 @@
   .dr-chat .m.ai::before{content:'⏺';color:var(--dr-fg2)}
   .dr-chat .m pre{margin:6px 0;padding:8px;border-radius:8px;background:rgba(0,0,0,.35);font:11px/1.45 ui-monospace,Menlo,monospace;overflow:hidden;max-width:100%;white-space:pre-wrap;overflow-wrap:anywhere}
   .dr-chat .m code{font:11px ui-monospace,Menlo,monospace;background:rgba(var(--dr-w),.1);padding:1px 4px;border-radius:4px}
+  .dr-chat .m code.pth{cursor:pointer;text-decoration:underline dotted transparent;text-underline-offset:2px;transition:text-decoration-color .15s}.dr-chat .m code.pth:hover,.dr-chat .m code.pth:focus-visible{text-decoration-color:currentColor;color:var(--dr-fg)}.dr-chat .m code.pth.miss{color:#ff8a8a;text-decoration-color:currentColor}
   .dr-chat .m a.lk{color:#7cc0ea;text-decoration:underline;text-decoration-color:rgba(124,192,234,.45);text-underline-offset:2px;overflow-wrap:anywhere}.dr-chat .m a.lk:hover{text-decoration-color:currentColor}
   .dr-chat .m .qa{margin:8px 0 2px;padding:10px;border-radius:10px;background:rgba(var(--dr-w),.05);border:1px solid rgba(var(--dr-w),.1)}
   .dr-chat .m .qnav{display:flex;align-items:center;margin-bottom:8px;font:600 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--dr-fg3b)}
@@ -1503,9 +1504,23 @@
   // markdown-lite: fenced code, inline code, bold, pipe tables, recap blocks, line breaks — enough for a worker's numbered reply
   // Links open in a new tab: [label](https://…) and bare http(s) URLs, trailing punctuation left outside. Not inside
   // `code`, and not in a choice button (a link inside a button is two controls in one).
-  const LINK_RE = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|https?:\/\/[^\s<>"'`]*[^\s<>"'`.,;:!?)\]*_]/g;
-  const linkify = (s) => { let out = '', last = 0; s.replace(LINK_RE, (m, label, href, at) => { out += esc(s.slice(last, at)) + `<a class="lk" href="${esc(href || m)}" target="_blank" rel="noopener noreferrer">${esc(label || m)}</a>`; last = at + m.length; return m; }); return out + esc(s.slice(last)); };
-  const inline = (t, noLinks) => String(t == null ? '' : t).split(/(`[^`\n]+`)/).map((s, i) => (i % 2 ? '<code>' + esc(s.slice(1, -1)) + '</code>' : noLinks ? esc(s) : linkify(s))).join('').replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
+  // A file path is a chip that reveals it in Finder (POST /api/reveal): any `code` span that reads as a path — one
+  // token with a slash, no scheme, `/:` ruled out as a route param, an optional :line(:col) — and, in prose, a path
+  // under ~, /Users, /private, /tmp or /Volumes. Plain (a choice button) gets neither.
+  const LINK_RE = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>"'`]*[^\s<>"'`.,;:!?)\]*_])|(^|[\s(])((?:~|\/Users|\/private|\/tmp|\/Volumes)\/[^\s<>"'`)]*[^\s<>"'`.,;:!?)\]])/g;
+  const PATH_RE = /^(?![@<-])(?!.*:\/\/)(?!.*\/:)[^\s`]*\/[^\s`]*$/;
+  const pathHtml = (p) => `<code class="pth" role="button" tabindex="0" title="Reveal in Finder" data-p="${esc(p)}">${esc(p)}</code>`;
+  const codeHtml = (c, plain) => (!plain && PATH_RE.test(c) ? pathHtml(c) : '<code>' + esc(c) + '</code>');
+  const linkify = (s) => { let out = '', last = 0; s.replace(LINK_RE, (m, label, href, bare, pre, path, at) => { out += esc(s.slice(last, at)) + (path ? esc(pre) + pathHtml(path) : `<a class="lk" href="${esc(href || bare)}" target="_blank" rel="noopener noreferrer">${esc(label || bare)}</a>`); last = at + m.length; return m; }); return out + esc(s.slice(last)); };
+  const inline = (t, plain) => String(t == null ? '' : t).split(/(`[^`\n]+`)/).map((s, i) => (i % 2 ? codeHtml(s.slice(1, -1), plain) : plain ? esc(s) : linkify(s))).join('').replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
+  // The chip asks the server to reveal the path (a :line suffix dropped); a miss shows on the chip for a moment.
+  async function reveal(c) {
+    const path = String(c.dataset.p || '').replace(/:\d+(?::\d+)?$/, ''); if (!path || c.classList.contains('busy')) return;
+    c.classList.add('busy');
+    try { const r = await fetch(API + '/api/reveal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) }); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'HTTP ' + r.status); }
+    catch (e) { c.classList.add('miss'); c.title = (e && e.message ? e.message : 'Could not reveal') + ' \u2014 ' + path; setTimeout(() => { c.classList.remove('miss'); c.title = 'Reveal in Finder'; }, 2500); }
+    c.classList.remove('busy');
+  }
   const isRow = (l) => /^\s*\|.*\|\s*$/.test(l || ''), cells = (l) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => inline(c.trim()));
   // A line that opens with "recap:" (however it is decorated) closes a stretch of work: it gets the
   // progress notes' quiet block — dim caps label, 2px rule — instead of running on inside the reply.
@@ -1726,6 +1741,7 @@
     chatLs.addEventListener('click', (e) => {
       const t = e.target; if (t instanceof HTMLImageElement && t.closest('.imgs')) return openLightbox(t.src, t.alt, t.getBoundingClientRect());
       const cp = t instanceof Element ? t.closest('.cp') : null; if (cp) { const pre = cp.parentElement && cp.parentElement.querySelector('pre'); copyText(pre ? pre.textContent : '', cp); return; }
+      const pth = t instanceof Element ? t.closest('.pth') : null; if (pth) { reveal(pth); return; }
       const qb = t instanceof Element ? t.closest('.qb') : null;
       // The choices and the text field are two ways to answer the SAME question, so the last one
       // used wins: tapping clears what was typed, and typing (below) clears the tap. Sending both
@@ -1734,6 +1750,7 @@
       const nb = t instanceof Element ? t.closest('.qback, .qnext, .qsub') : null;
       if (nb) { const qa = nb.closest('.qa'); if (!qa || qa.classList.contains('answered')) return; if (nb.classList.contains('qback')) stepGo(qa, -1); else if (nb.classList.contains('qnext')) stepGo(qa, 1); else chatAnswer(qa); }
     });
+    chatLs.addEventListener('keydown', (e) => { if (e.key !== 'Enter' && e.key !== ' ') return; const pth = e.target instanceof Element ? e.target.closest('.pth') : null; if (pth) { e.preventDefault(); reveal(pth); } }); // a chip is a button to the keyboard too
     chatLs.addEventListener('submit', (e) => { const f = e.target instanceof Element ? e.target.closest('.qf') : null; if (!f) return; e.preventDefault(); const qa = f.closest('.qa'), steps = [...qa.querySelectorAll('.qstep')]; if (steps.indexOf(f.closest('.qstep')) === steps.length - 1) chatAnswer(qa); else stepGo(qa, 1); });
     const rz = el('div', 'dr-chat-rz'); rz.title = 'Resize';
     rz.addEventListener('pointerdown', (e) => {
