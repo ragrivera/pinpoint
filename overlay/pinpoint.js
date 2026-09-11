@@ -1785,7 +1785,6 @@
       case 'tool_error': return n('tool err', esc(ev.text));
       case 'result': return n('result' + (ev.ok ? '' : ' err'), ev.ok ? `turn done · ${Math.round((ev.ms || 0) / 1000)}s${ev.cost ? ' · $' + Number(ev.cost).toFixed(2) : ''}` : 'turn failed · ' + esc(ev.text || ev.subtype || ''));
       case 'status':
-        if (ev.reset) return n('status', 'conversation cleared — the worker starts from a blank context' + (ev.pins ? ' \u00b7 ' + ev.pins + ' pin' + (ev.pins === 1 ? '' : 's') + ' forgotten, the next ones start at #1' : ''));
         if (ev.compacted) return n('status', 'context compacted' + (ev.pre ? ' · ' + (ev.pre / 1000).toFixed(1) + 'k → ' + (ev.post / 1000).toFixed(1) + 'k tokens' : ''));
         if (ev.handoff) return n('status handoff', '<span class="hi" aria-hidden="true">&gt;_</span><b>Handed off to a terminal</b><span class="sub">The resume command is on your clipboard — paste it in a terminal to carry this session on there. A message here starts a new worker on the same session.</span>');
         if (ev.modelSet) return n('status', 'model \u2192 ' + esc(modelLabel(ev.model)) + ' — the worker restarts on it, resuming this session');
@@ -1834,8 +1833,9 @@
   }
   function chatAppend(ev) {
     if (!chatLs) return; if (ev.t === 'status' && ev.closed) { if (chatEs) { chatEs.close(); chatEs = null; } dropConvo(chatUi.cur); return; } // closed (here or in another tab): leave it
+    if (ev.t === 'status' && ev.reset) { chatLs.innerHTML = ''; chatAtBottom = true; snForget(chatUi.cur, Date.parse(ev.at)); return; } // /clear wipes the drawer transcript and the batch's pins: live, and on replay so a reload stays cleared
+    if (ev.t === 'result' && ev.ok && !chatLs.firstElementChild) return; // the /clear turn's 'turn done' would be the only thing left on the blank slate
     if (ev.t === 'user') lockQuestions(ev.text); const node = chatLine(ev); if (!node) return;
-    if (ev.t === 'status' && ev.reset) { chatLs.innerHTML = ''; chatAtBottom = true; snForget(chatUi.cur, Date.parse(ev.at)); } // /clear wipes the drawer transcript and the batch's pins: live, and on replay so a reload stays cleared
     if (ev.t === 'tool_error') { const last = [...chatLs.querySelectorAll('.m.tool:not(.err)')].pop(); if (last) last.classList.add('failed'); } // the failed call's dot turns red
     // A recap closes the stretch of work, so the transcript ends on it: the 'turn done' line that
     // follows one is noise. A failed turn still gets its row.
