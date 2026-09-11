@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Features
+- ✨ Links in a worker's reply are clickable: `[label](https://…)` and bare `http(s)://` URLs open in
+  a new tab (`rel="noopener noreferrer"`), trailing punctuation left outside the link. Not inside
+  `code` spans, and not inside a question's choice buttons — a link inside a button would be two
+  controls in one (overlay)
+
+### Changed
+- 💄 A non-image attachment is a file tile — the extension (a file glyph when there is none) over
+  the name clamped to two lines — the same square as a screenshot thumbnail, in the composer and in
+  the sent message, instead of a filename chip (overlay)
+- 🚸 `/clear` wipes the drawer transcript on replay as well as live, so a reload stays cleared; the
+  "conversation cleared" status line and the lone "turn done" of the /clear turn no longer sit on the
+  blank slate (overlay)
+
+### Fixed
+- 🐛 The update pill's `×` dismisses the pill while its update is running too — it was inert until
+  the worker's turn ended, because a running update forced the pill visible. The update conversation
+  stays reachable in the picker (overlay)
+
 ## [0.7.0] - 2026-09-10
 
 ### Features
