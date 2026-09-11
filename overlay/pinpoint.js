@@ -1286,6 +1286,7 @@
   .dr-chat .m.ai::before{content:'⏺';color:var(--dr-fg2)}
   .dr-chat .m pre{margin:6px 0;padding:8px;border-radius:8px;background:rgba(0,0,0,.35);font:11px/1.45 ui-monospace,Menlo,monospace;overflow:hidden;max-width:100%;white-space:pre-wrap;overflow-wrap:anywhere}
   .dr-chat .m code{font:11px ui-monospace,Menlo,monospace;background:rgba(var(--dr-w),.1);padding:1px 4px;border-radius:4px}
+  .dr-chat .m a.lk{color:#7cc0ea;text-decoration:underline;text-decoration-color:rgba(124,192,234,.45);text-underline-offset:2px;overflow-wrap:anywhere}.dr-chat .m a.lk:hover{text-decoration-color:currentColor}
   .dr-chat .m .qa{margin:8px 0 2px;padding:10px;border-radius:10px;background:rgba(var(--dr-w),.05);border:1px solid rgba(var(--dr-w),.1)}
   .dr-chat .m .qnav{display:flex;align-items:center;margin-bottom:8px;font:600 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--dr-fg3b)}
   .dr-chat .m .qstep{display:none}.dr-chat .m .qstep.on,.dr-chat .m .qa.answered .qstep{display:block}
@@ -1497,7 +1498,11 @@
   const noStamp = (t) => String(t == null ? '' : t).replace(/^\s*[*_]{0,2}\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\][*_]{0,2}[ \t]*\r?\n?/, '');
   // markdown-lite: fenced code, inline code, bold, line breaks — enough for a worker's numbered reply
   // markdown-lite: fenced code, inline code, bold, pipe tables, recap blocks, line breaks — enough for a worker's numbered reply
-  const inline = (t) => esc(t).replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
+  // Links open in a new tab: [label](https://…) and bare http(s) URLs, trailing punctuation left outside. Not inside
+  // `code`, and not in a choice button (a link inside a button is two controls in one).
+  const LINK_RE = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|https?:\/\/[^\s<>"'`]*[^\s<>"'`.,;:!?)\]*_]/g;
+  const linkify = (s) => { let out = '', last = 0; s.replace(LINK_RE, (m, label, href, at) => { out += esc(s.slice(last, at)) + `<a class="lk" href="${esc(href || m)}" target="_blank" rel="noopener noreferrer">${esc(label || m)}</a>`; last = at + m.length; return m; }); return out + esc(s.slice(last)); };
+  const inline = (t, noLinks) => String(t == null ? '' : t).split(/(`[^`\n]+`)/).map((s, i) => (i % 2 ? '<code>' + esc(s.slice(1, -1)) + '</code>' : noLinks ? esc(s) : linkify(s))).join('').replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
   const isRow = (l) => /^\s*\|.*\|\s*$/.test(l || ''), cells = (l) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => inline(c.trim()));
   // A line that opens with "recap:" (however it is decorated) closes a stretch of work: it gets the
   // progress notes' quiet block — dim caps label, 2px rule — instead of running on inside the reply.
@@ -1521,7 +1526,7 @@
   };
   const stepperHtml = (qs) => {
     const n = qs.length;
-    const steps = qs.map((x, i) => `<div class="qstep${i === 0 ? ' on' : ''}" data-i="${i}" data-q="${esc(x.q)}"${x.multi ? ' data-multi="1"' : ''}>${x.q || x.multi ? '<div class="qq">' + inline(x.q) + (x.multi ? '<span class="qhint">pick any</span>' : '') + '</div>' : ''}<div class="qo">${x.o.map((c) => '<button type="button" class="qb' + (c.rec ? ' rec' : '') + '" data-a="' + esc(c.c) + '">' + (c.rec ? '<span class="qrec">Recommended</span>' : '') + inline(c.c) + '</button>').join('')}</div><form class="qf"><input class="qi" type="text" placeholder="Type your own instead\u2026" autocomplete="off" spellcheck="false"></form></div>`).join('');
+    const steps = qs.map((x, i) => `<div class="qstep${i === 0 ? ' on' : ''}" data-i="${i}" data-q="${esc(x.q)}"${x.multi ? ' data-multi="1"' : ''}>${x.q || x.multi ? '<div class="qq">' + inline(x.q) + (x.multi ? '<span class="qhint">pick any</span>' : '') + '</div>' : ''}<div class="qo">${x.o.map((c) => '<button type="button" class="qb' + (c.rec ? ' rec' : '') + '" data-a="' + esc(c.c) + '">' + (c.rec ? '<span class="qrec">Recommended</span>' : '') + inline(c.c, true) + '</button>').join('')}</div><form class="qf"><input class="qi" type="text" placeholder="Type your own instead\u2026" autocomplete="off" spellcheck="false"></form></div>`).join('');
     const nav = n > 1 ? `<div class="qnav"><span class="qpos">1 of ${n}</span></div>` : '';
     const act = `<div class="qact">${n > 1 ? '<button type="button" class="qback" style="visibility:hidden">Back</button>' : ''}<span class="sp"></span>${n > 1 ? '<button type="button" class="qnext">Next</button>' : ''}<button type="button" class="qsub"${n > 1 ? ' style="display:none"' : ''}>Submit</button></div>`;
     return `<div class="qa" data-n="${n}">${nav}${steps}${act}</div>`;
