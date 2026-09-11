@@ -1286,6 +1286,7 @@
   .dr-chat .m.ai::before{content:'⏺';color:var(--dr-fg2)}
   .dr-chat .m pre{margin:6px 0;padding:8px;border-radius:8px;background:rgba(0,0,0,.35);font:11px/1.45 ui-monospace,Menlo,monospace;overflow:hidden;max-width:100%;white-space:pre-wrap;overflow-wrap:anywhere}
   .dr-chat .m code{font:11px ui-monospace,Menlo,monospace;background:rgba(var(--dr-w),.1);padding:1px 4px;border-radius:4px}
+  .dr-chat .m a.lk{color:#7cc0ea;text-decoration:underline;text-decoration-color:rgba(124,192,234,.45);text-underline-offset:2px;overflow-wrap:anywhere}.dr-chat .m a.lk:hover{text-decoration-color:currentColor}
   .dr-chat .m .qa{margin:8px 0 2px;padding:10px;border-radius:10px;background:rgba(var(--dr-w),.05);border:1px solid rgba(var(--dr-w),.1)}
   .dr-chat .m .qnav{display:flex;align-items:center;margin-bottom:8px;font:600 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--dr-fg3b)}
   .dr-chat .m .qstep{display:none}.dr-chat .m .qstep.on,.dr-chat .m .qa.answered .qstep{display:block}
@@ -1388,16 +1389,17 @@
   .dr-chat-btn{font-size:13px}
   .dr-chat-att{flex:none;display:flex;gap:6px;flex-wrap:wrap;padding:10px 0 0}
   .dr-chat-att .a{position:relative;width:56px;height:56px;border-radius:8px;overflow:hidden;border:1px solid rgba(var(--dr-w),.15);background:rgba(0,0,0,.2)}
-  /* Not an image: nothing to preview, so the chip is the filename. */
-  .dr-chat-att .a.doc{width:auto;max-width:170px;height:auto;padding:7px 22px 7px 9px;display:flex;align-items:center;background:rgba(var(--dr-w),.06)}
-  .dr-chat-att .a.doc .n{min-width:0;font:11px/1.3 ui-monospace,Menlo,monospace;color:var(--dr-fg2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* Not an image: nothing to preview, so the tile is the extension (or a file glyph) over the name, the same square as a thumbnail. */
+  .dr-chat-att .a.doc{box-sizing:border-box;padding:6px;display:flex;flex-direction:column;justify-content:space-between;background:rgba(var(--dr-w),.06)}
+  .dr-chat .ft-x{font:700 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;color:var(--dr-fg)}.dr-chat .ft-x svg{display:block}
+  .dr-chat .ft-n{font:9px/1.25 ui-monospace,Menlo,monospace;color:var(--dr-fg3);word-break:break-all;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
   .dr-chat-att img{width:100%;height:100%;object-fit:cover;display:block}
   .dr-chat-att .x{position:absolute;top:2px;right:2px;width:18px;height:18px;border:0;border-radius:99px;background:rgba(0,0,0,.65);color:#fff;font:12px/18px system-ui,sans-serif;cursor:pointer;padding:0}
   .dr-chat-clip{flex:none;width:28px;height:28px;display:grid;place-items:center;border:0;border-radius:8px;background:transparent;color:var(--dr-fg3b);cursor:pointer;padding:0}
   .dr-chat-clip:hover{background:rgba(var(--dr-w),.08);color:var(--dr-fg)}
   .dr-chat .m .imgs{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
   .dr-chat .m .imgs img{width:64px;height:64px;object-fit:cover;border-radius:8px;cursor:zoom-in;display:block;border:1px solid rgba(0,0,0,.15)}
-  .dr-chat .m .imgs .doc{align-self:center;max-width:100%;padding:5px 9px;border-radius:8px;border:1px solid rgba(var(--dr-w),.15);background:rgba(var(--dr-w),.06);color:var(--dr-fg2);font:11px/1.3 ui-monospace,Menlo,monospace;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dr-chat .m .imgs .doc{width:64px;height:64px;box-sizing:border-box;padding:7px;display:flex;flex-direction:column;justify-content:space-between;border-radius:8px;border:1px solid rgba(var(--dr-w),.15);background:rgba(var(--dr-w),.06);text-decoration:none;overflow:hidden}
   .dr-chat .m .imgs .doc:hover{color:var(--dr-fg);border-color:rgba(var(--dr-w),.28)}
   .dr-chat.drop::after{content:'Drop screenshots to attach';position:absolute;inset:8px;border:2px dashed #39d98a;border-radius:14px;background:rgba(57,217,138,.08);display:grid;place-items:center;font:600 12px ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:#39d98a;pointer-events:none}
   .dr-chat-pins{flex:none;display:flex;flex-direction:column;gap:6px;padding:10px 0 0;max-height:32vh;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(var(--dr-w),.18) transparent}
@@ -1418,8 +1420,10 @@
   let chatAtt = null, chatFiles = []; // pending attachments: { name, type, data (base64), img, preview?, w?, h?, size? }
   const IMG_MAX_EDGE = 1600, IMG_MAX = 6, FILE_MAX_BYTES = 6_000_000;
   const kb = (n) => (n < 1024 ? n + ' B' : n < 1024 * 1024 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
+  // A file tile's face: the extension on top (a file glyph when there is none), the name under it clamped to two lines
+  const fileTileHtml = (name) => { const s = String(name || 'file'), i = s.lastIndexOf('.'), ext = i > 0 && /^[a-z0-9]{1,5}$/i.test(s.slice(i + 1)) ? s.slice(i + 1) : ''; return `<span class="ft-x">${ext ? esc(ext) : ico('M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5', 14)}</span><span class="ft-n">${esc(ext ? s.slice(0, i) : s)}</span>`; };
   const imgsHtml = (imgs) => Array.isArray(imgs) && imgs.length ? `<div class="imgs">${imgs.map((i) => (i.img === false
-    ? `<a class="doc" href="${esc(API + i.url)}" target="_blank" rel="noopener" title="${esc(i.name || '')}">${esc(i.name || 'file')}</a>`
+    ? `<a class="doc" href="${esc(API + i.url)}" target="_blank" rel="noopener" title="${esc(i.name || '')}">${fileTileHtml(i.name)}</a>`
     : `<img src="${esc(API + i.url)}" alt="${esc(i.name || '')}" title="${esc(i.name || '')}">`)).join('')}</div>` : '';
   const pinsHtml = (p) => p && p.count ? `<div class="pins">📌 ${p.count} pin${p.count === 1 ? '' : 's'} · #${p.first}${p.count > 1 ? '–#' + (p.first + p.count - 1) : ''}</div>` : '';
   // Any file can ride along. An image is downscaled and sent inline, because that is the only way the
@@ -1457,7 +1461,7 @@
       const a = el('div', 'a' + (f.img === false ? ' doc' : ''));
       const x = el('button', 'x', '×'); x.title = 'Remove'; x.onclick = () => { chatFiles.splice(i, 1); renderAtt(); };
       if (f.img === false) {
-        const n = el('span', 'n', esc(f.name)); a.title = `${f.name} · ${kb(f.size || 0)}`; a.append(n, x);
+        a.innerHTML = fileTileHtml(f.name); a.title = `${f.name} · ${kb(f.size || 0)}`; a.append(x);
       } else {
         const im = document.createElement('img'); im.src = f.preview; im.title = `${f.name} · ${f.w}×${f.h}`; a.append(im, x);
       }
@@ -1497,7 +1501,11 @@
   const noStamp = (t) => String(t == null ? '' : t).replace(/^\s*[*_]{0,2}\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\][*_]{0,2}[ \t]*\r?\n?/, '');
   // markdown-lite: fenced code, inline code, bold, line breaks — enough for a worker's numbered reply
   // markdown-lite: fenced code, inline code, bold, pipe tables, recap blocks, line breaks — enough for a worker's numbered reply
-  const inline = (t) => esc(t).replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
+  // Links open in a new tab: [label](https://…) and bare http(s) URLs, trailing punctuation left outside. Not inside
+  // `code`, and not in a choice button (a link inside a button is two controls in one).
+  const LINK_RE = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|https?:\/\/[^\s<>"'`]*[^\s<>"'`.,;:!?)\]*_]/g;
+  const linkify = (s) => { let out = '', last = 0; s.replace(LINK_RE, (m, label, href, at) => { out += esc(s.slice(last, at)) + `<a class="lk" href="${esc(href || m)}" target="_blank" rel="noopener noreferrer">${esc(label || m)}</a>`; last = at + m.length; return m; }); return out + esc(s.slice(last)); };
+  const inline = (t, noLinks) => String(t == null ? '' : t).split(/(`[^`\n]+`)/).map((s, i) => (i % 2 ? '<code>' + esc(s.slice(1, -1)) + '</code>' : noLinks ? esc(s) : linkify(s))).join('').replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
   const isRow = (l) => /^\s*\|.*\|\s*$/.test(l || ''), cells = (l) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => inline(c.trim()));
   // A line that opens with "recap:" (however it is decorated) closes a stretch of work: it gets the
   // progress notes' quiet block — dim caps label, 2px rule — instead of running on inside the reply.
@@ -1521,7 +1529,7 @@
   };
   const stepperHtml = (qs) => {
     const n = qs.length;
-    const steps = qs.map((x, i) => `<div class="qstep${i === 0 ? ' on' : ''}" data-i="${i}" data-q="${esc(x.q)}"${x.multi ? ' data-multi="1"' : ''}>${x.q || x.multi ? '<div class="qq">' + inline(x.q) + (x.multi ? '<span class="qhint">pick any</span>' : '') + '</div>' : ''}<div class="qo">${x.o.map((c) => '<button type="button" class="qb' + (c.rec ? ' rec' : '') + '" data-a="' + esc(c.c) + '">' + (c.rec ? '<span class="qrec">Recommended</span>' : '') + inline(c.c) + '</button>').join('')}</div><form class="qf"><input class="qi" type="text" placeholder="Type your own instead\u2026" autocomplete="off" spellcheck="false"></form></div>`).join('');
+    const steps = qs.map((x, i) => `<div class="qstep${i === 0 ? ' on' : ''}" data-i="${i}" data-q="${esc(x.q)}"${x.multi ? ' data-multi="1"' : ''}>${x.q || x.multi ? '<div class="qq">' + inline(x.q) + (x.multi ? '<span class="qhint">pick any</span>' : '') + '</div>' : ''}<div class="qo">${x.o.map((c) => '<button type="button" class="qb' + (c.rec ? ' rec' : '') + '" data-a="' + esc(c.c) + '">' + (c.rec ? '<span class="qrec">Recommended</span>' : '') + inline(c.c, true) + '</button>').join('')}</div><form class="qf"><input class="qi" type="text" placeholder="Type your own instead\u2026" autocomplete="off" spellcheck="false"></form></div>`).join('');
     const nav = n > 1 ? `<div class="qnav"><span class="qpos">1 of ${n}</span></div>` : '';
     const act = `<div class="qact">${n > 1 ? '<button type="button" class="qback" style="visibility:hidden">Back</button>' : ''}<span class="sp"></span>${n > 1 ? '<button type="button" class="qnext">Next</button>' : ''}<button type="button" class="qsub"${n > 1 ? ' style="display:none"' : ''}>Submit</button></div>`;
     return `<div class="qa" data-n="${n}">${nav}${steps}${act}</div>`;
@@ -1777,7 +1785,6 @@
       case 'tool_error': return n('tool err', esc(ev.text));
       case 'result': return n('result' + (ev.ok ? '' : ' err'), ev.ok ? `turn done · ${Math.round((ev.ms || 0) / 1000)}s${ev.cost ? ' · $' + Number(ev.cost).toFixed(2) : ''}` : 'turn failed · ' + esc(ev.text || ev.subtype || ''));
       case 'status':
-        if (ev.reset) return n('status', 'conversation cleared — the worker starts from a blank context' + (ev.pins ? ' \u00b7 ' + ev.pins + ' pin' + (ev.pins === 1 ? '' : 's') + ' forgotten, the next ones start at #1' : ''));
         if (ev.compacted) return n('status', 'context compacted' + (ev.pre ? ' · ' + (ev.pre / 1000).toFixed(1) + 'k → ' + (ev.post / 1000).toFixed(1) + 'k tokens' : ''));
         if (ev.handoff) return n('status handoff', '<span class="hi" aria-hidden="true">&gt;_</span><b>Handed off to a terminal</b><span class="sub">The resume command is on your clipboard — paste it in a terminal to carry this session on there. A message here starts a new worker on the same session.</span>');
         if (ev.modelSet) return n('status', 'model \u2192 ' + esc(modelLabel(ev.model)) + ' — the worker restarts on it, resuming this session');
@@ -1826,8 +1833,9 @@
   }
   function chatAppend(ev) {
     if (!chatLs) return; if (ev.t === 'status' && ev.closed) { if (chatEs) { chatEs.close(); chatEs = null; } dropConvo(chatUi.cur); return; } // closed (here or in another tab): leave it
+    if (ev.t === 'status' && ev.reset) { chatLs.innerHTML = ''; chatAtBottom = true; snForget(chatUi.cur, Date.parse(ev.at)); return; } // /clear wipes the drawer transcript and the batch's pins: live, and on replay so a reload stays cleared
+    if (ev.t === 'result' && ev.ok && !chatLs.firstElementChild) return; // the /clear turn's 'turn done' would be the only thing left on the blank slate
     if (ev.t === 'user') lockQuestions(ev.text); const node = chatLine(ev); if (!node) return;
-    if (ev.t === 'status' && ev.reset) { chatLs.innerHTML = ''; chatAtBottom = true; snForget(chatUi.cur, Date.parse(ev.at)); } // /clear wipes the drawer transcript and the batch's pins: live, and on replay so a reload stays cleared
     if (ev.t === 'tool_error') { const last = [...chatLs.querySelectorAll('.m.tool:not(.err)')].pop(); if (last) last.classList.add('failed'); } // the failed call's dot turns red
     // A recap closes the stretch of work, so the transcript ends on it: the 'turn done' line that
     // follows one is noise. A failed turn still gets its row.
@@ -1971,8 +1979,8 @@
   // spawn or resume) and reports on /api/health and the prelude; the open drawer re-reads health with its conversation
   // poll, so the update pill shows up shortly after the spawn that found it.
   let chatUpdate = BRAND.update && BRAND.update.available ? BRAND.update : null;
-  const UPD_KEY = BRAND.key + ':updDismissed'; // latest version the user dismissed with the pill's x: the pill stays hidden until a newer one shows up
-  const updSync = () => { const w = chatEl && chatEl._upd; if (!w) return; let seen = null; try { seen = localStorage.getItem(UPD_KEY); } catch (e) {} const show = !!chatUpdate && (seen !== chatUpdate.latest || !!chatUpdating); w.style.display = show ? '' : 'none'; if (!show) return; if (chatUpdating) { w._t.textContent = 'updating to ' + chatUpdate.latest + '\u2026'; w._go.title = 'A headless worker is installing pinpoint ' + chatUpdate.latest + ' \u2014 click to watch it'; return; } w._t.textContent = 'pinpoint ' + chatUpdate.latest + ' \u00b7 update'; w._go.title = 'Newer pinpoint: ' + chatUpdate.current + ' \u2192 ' + chatUpdate.latest + '. Click to update: a headless worker runs ' + chatUpdate.command + ', the server restarts on the new version, and the conversation ends with what changed.'; };
+  const UPD_KEY = BRAND.key + ':updDismissed'; // latest version the user dismissed with the pill's x: the pill stays hidden until a newer one shows up (an update in progress too: its conversation is still in the picker)
+  const updSync = () => { const w = chatEl && chatEl._upd; if (!w) return; let seen = null; try { seen = localStorage.getItem(UPD_KEY); } catch (e) {} const show = !!chatUpdate && seen !== chatUpdate.latest; w.style.display = show ? '' : 'none'; if (!show) return; if (chatUpdating) { w._t.textContent = 'updating to ' + chatUpdate.latest + '\u2026'; w._go.title = 'A headless worker is installing pinpoint ' + chatUpdate.latest + ' \u2014 click to watch it'; return; } w._t.textContent = 'pinpoint ' + chatUpdate.latest + ' \u00b7 update'; w._go.title = 'Newer pinpoint: ' + chatUpdate.current + ' \u2192 ' + chatUpdate.latest + '. Click to update: a headless worker runs ' + chatUpdate.command + ', the server restarts on the new version, and the conversation ends with what changed.'; };
   const shq = (s) => (/^[\w./-]+$/.test(s) ? s : "'" + s.replace(/'/g, "'\\''") + "'");
   const clipWrite = (text) => { const fb = () => { const ta = document.createElement('textarea'); ta.value = text; ta.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); let ok = false; try { ok = document.execCommand('copy'); } catch (err) {} ta.remove(); return ok; }; return navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(text).then(() => true, () => fb()) : Promise.resolve(fb()); };
   async function handoffConvo() {
