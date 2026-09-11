@@ -1389,16 +1389,17 @@
   .dr-chat-btn{font-size:13px}
   .dr-chat-att{flex:none;display:flex;gap:6px;flex-wrap:wrap;padding:10px 0 0}
   .dr-chat-att .a{position:relative;width:56px;height:56px;border-radius:8px;overflow:hidden;border:1px solid rgba(var(--dr-w),.15);background:rgba(0,0,0,.2)}
-  /* Not an image: nothing to preview, so the chip is the filename. */
-  .dr-chat-att .a.doc{width:auto;max-width:170px;height:auto;padding:7px 22px 7px 9px;display:flex;align-items:center;background:rgba(var(--dr-w),.06)}
-  .dr-chat-att .a.doc .n{min-width:0;font:11px/1.3 ui-monospace,Menlo,monospace;color:var(--dr-fg2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* Not an image: nothing to preview, so the tile is the extension (or a file glyph) over the name, the same square as a thumbnail. */
+  .dr-chat-att .a.doc{box-sizing:border-box;padding:6px;display:flex;flex-direction:column;justify-content:space-between;background:rgba(var(--dr-w),.06)}
+  .dr-chat .ft-x{font:700 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;color:var(--dr-fg)}.dr-chat .ft-x svg{display:block}
+  .dr-chat .ft-n{font:9px/1.25 ui-monospace,Menlo,monospace;color:var(--dr-fg3);word-break:break-all;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
   .dr-chat-att img{width:100%;height:100%;object-fit:cover;display:block}
   .dr-chat-att .x{position:absolute;top:2px;right:2px;width:18px;height:18px;border:0;border-radius:99px;background:rgba(0,0,0,.65);color:#fff;font:12px/18px system-ui,sans-serif;cursor:pointer;padding:0}
   .dr-chat-clip{flex:none;width:28px;height:28px;display:grid;place-items:center;border:0;border-radius:8px;background:transparent;color:var(--dr-fg3b);cursor:pointer;padding:0}
   .dr-chat-clip:hover{background:rgba(var(--dr-w),.08);color:var(--dr-fg)}
   .dr-chat .m .imgs{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
   .dr-chat .m .imgs img{width:64px;height:64px;object-fit:cover;border-radius:8px;cursor:zoom-in;display:block;border:1px solid rgba(0,0,0,.15)}
-  .dr-chat .m .imgs .doc{align-self:center;max-width:100%;padding:5px 9px;border-radius:8px;border:1px solid rgba(var(--dr-w),.15);background:rgba(var(--dr-w),.06);color:var(--dr-fg2);font:11px/1.3 ui-monospace,Menlo,monospace;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dr-chat .m .imgs .doc{width:64px;height:64px;box-sizing:border-box;padding:7px;display:flex;flex-direction:column;justify-content:space-between;border-radius:8px;border:1px solid rgba(var(--dr-w),.15);background:rgba(var(--dr-w),.06);text-decoration:none;overflow:hidden}
   .dr-chat .m .imgs .doc:hover{color:var(--dr-fg);border-color:rgba(var(--dr-w),.28)}
   .dr-chat.drop::after{content:'Drop screenshots to attach';position:absolute;inset:8px;border:2px dashed #39d98a;border-radius:14px;background:rgba(57,217,138,.08);display:grid;place-items:center;font:600 12px ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:#39d98a;pointer-events:none}
   .dr-chat-pins{flex:none;display:flex;flex-direction:column;gap:6px;padding:10px 0 0;max-height:32vh;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(var(--dr-w),.18) transparent}
@@ -1419,8 +1420,10 @@
   let chatAtt = null, chatFiles = []; // pending attachments: { name, type, data (base64), img, preview?, w?, h?, size? }
   const IMG_MAX_EDGE = 1600, IMG_MAX = 6, FILE_MAX_BYTES = 6_000_000;
   const kb = (n) => (n < 1024 ? n + ' B' : n < 1024 * 1024 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
+  // A file tile's face: the extension on top (a file glyph when there is none), the name under it clamped to two lines
+  const fileTileHtml = (name) => { const s = String(name || 'file'), i = s.lastIndexOf('.'), ext = i > 0 && /^[a-z0-9]{1,5}$/i.test(s.slice(i + 1)) ? s.slice(i + 1) : ''; return `<span class="ft-x">${ext ? esc(ext) : ico('M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5', 14)}</span><span class="ft-n">${esc(ext ? s.slice(0, i) : s)}</span>`; };
   const imgsHtml = (imgs) => Array.isArray(imgs) && imgs.length ? `<div class="imgs">${imgs.map((i) => (i.img === false
-    ? `<a class="doc" href="${esc(API + i.url)}" target="_blank" rel="noopener" title="${esc(i.name || '')}">${esc(i.name || 'file')}</a>`
+    ? `<a class="doc" href="${esc(API + i.url)}" target="_blank" rel="noopener" title="${esc(i.name || '')}">${fileTileHtml(i.name)}</a>`
     : `<img src="${esc(API + i.url)}" alt="${esc(i.name || '')}" title="${esc(i.name || '')}">`)).join('')}</div>` : '';
   const pinsHtml = (p) => p && p.count ? `<div class="pins">📌 ${p.count} pin${p.count === 1 ? '' : 's'} · #${p.first}${p.count > 1 ? '–#' + (p.first + p.count - 1) : ''}</div>` : '';
   // Any file can ride along. An image is downscaled and sent inline, because that is the only way the
@@ -1458,7 +1461,7 @@
       const a = el('div', 'a' + (f.img === false ? ' doc' : ''));
       const x = el('button', 'x', '×'); x.title = 'Remove'; x.onclick = () => { chatFiles.splice(i, 1); renderAtt(); };
       if (f.img === false) {
-        const n = el('span', 'n', esc(f.name)); a.title = `${f.name} · ${kb(f.size || 0)}`; a.append(n, x);
+        a.innerHTML = fileTileHtml(f.name); a.title = `${f.name} · ${kb(f.size || 0)}`; a.append(x);
       } else {
         const im = document.createElement('img'); im.src = f.preview; im.title = `${f.name} · ${f.w}×${f.h}`; a.append(im, x);
       }
