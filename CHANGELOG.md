@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.8.1] - 2026-09-24
 
 ### Features
 - ✨ Click the `pinpoint X.Y.Z` version at the drawer's foot to check for updates now instead of waiting for
