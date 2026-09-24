@@ -172,7 +172,7 @@ const UPDATE_REPO = process.env.PINPOINT_UPDATE_REPO || (gh ? `https://github.co
 const semver = (v: string) => { const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(v); return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null; };
 const semverCmp = (a: string, b: string) => { const x = semver(a), y = semver(b); if (!x || !y) return 0; for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
 let update: UpdateInfo | null = null;
-let updateRunning = false; // one check at a time: a burst of spawns shares the one in flight
+let updateInFlight: Promise<UpdateInfo | null> | null = null; // one check at a time: a burst of spawns (or a forced check) shares the one in flight
 async function checkUpdate(): Promise<UpdateInfo | null> {
   const proc = Bun.spawn(['git', 'ls-remote', '--tags', '--refs', UPDATE_REPO], { stdout: 'pipe', stderr: 'ignore', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
   const timer = setTimeout(() => { try { proc.kill(); } catch {} }, 8_000);
@@ -185,13 +185,18 @@ async function checkUpdate(): Promise<UpdateInfo | null> {
   const spec = gh ? `github:${gh[1]}#v${latest}` : `${pkg.name}@${latest}`;
   return { current: pkg.version, latest, available: semverCmp(latest, pkg.version) > 0, checkedAt: new Date().toISOString(), repo: UPDATE_REPO, command: `bun add -D ${spec}` };
 }
-function maybeCheckUpdate() {
-  if (!UPDATE_CHECK || !UPDATE_REPO || updateRunning) return;
-  updateRunning = true;
-  checkUpdate().then((u) => {
+/** Check now (or join the check in flight); resolves to the fresh result, or null when the tags could not be read. */
+function runUpdateCheck(): Promise<UpdateInfo | null> {
+  updateInFlight ??= checkUpdate().then((u) => {
     if (u && (!update || update.latest !== u.latest)) log(u.available ? `update available: ${pkg.name} ${u.current} → ${u.latest}  (${u.command})` : `up to date: ${pkg.name} ${u.current}`);
     if (u) update = u;
-  }).catch(() => {}).finally(() => { updateRunning = false; });
+    return u;
+  }).catch(() => null).finally(() => { updateInFlight = null; });
+  return updateInFlight;
+}
+function maybeCheckUpdate() {
+  if (!UPDATE_CHECK || !UPDATE_REPO) return;
+  void runUpdateCheck();
 }
 
 // ─── Session identity ─────────────────────────────────────────────────────────
@@ -1002,6 +1007,14 @@ try {
         const j = await req.json().catch(() => ({}));
         try { const r = startUpdate(String(j?.page || ''), String(j?.title || ''), j?.model, j?.effort); return Response.json({ ok: true, ...r }, { headers: CORS }); }
         catch (e: any) { const st = e instanceof PinError ? e.status : 500; log('update refused', st, e?.message); return Response.json({ ok: false, error: String(e?.message || e), hint: e?.hint ?? null }, { status: st, headers: CORS }); }
+      }
+      // The drawer's version label: check the package repo's tags now rather than at the next spawn or 4-hour tick,
+      // and answer with the result (8s cap), which /api/health and the prelude carry from then on.
+      if (url.pathname === '/api/update/check' && req.method === 'POST') {
+        if (!UPDATE_CHECK || !UPDATE_REPO) return Response.json({ ok: false, error: 'Update checks are off', hint: '"updateCheck": false in .pinpoint.json, PINPOINT_NO_UPDATE_CHECK=1, or no package repo to check' }, { status: 409, headers: CORS });
+        const u = await runUpdateCheck();
+        if (!u) return Response.json({ ok: false, error: `Could not read the tags on ${UPDATE_REPO}`, hint: 'git ls-remote failed or timed out: offline, or no access to the repo' }, { status: 502, headers: CORS });
+        return Response.json({ ok: true, update: u }, { headers: CORS });
       }
       // A path chip in the drawer: reveal the file in Finder. `~` is this user's home, a relative path is under the
       // project; the opener is `open -R` (PINPOINT_OPEN swaps it — the tests stub it), so nothing runs but Finder.

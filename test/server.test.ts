@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { BIN, cleanEnv, freePort, mcpClient, tmpProject, waitFor } from './helpers.ts';
 
@@ -308,6 +308,12 @@ describe('worker dispatch spawns claude with the picked model', () => {
     expect((await r.json()).error).toContain('up to date');
   });
 
+  test('POST /api/update/check is refused when update checks are off', async () => {
+    const r = await wPost('/api/update/check', {});
+    expect(r.status).toBe(409);
+    expect((await r.json()).error).toContain('off');
+  });
+
   test('leaves --model off when the batch picks the default', async () => {
     const id = await sendBatch('');
     const { a, chat } = await spawnedFor(id);
@@ -539,6 +545,21 @@ describe('update check on every worker spawn', () => {
     expect((await post(`/api/chat/${id}`, { text: 'again' })).status).toBe(200);
     await waitFor(async () => (await latest()) === '52.0.0', 10000);
   }, 45000);
+
+  // The drawer's version label forces a check: it answers with the fresh result instead of waiting for a spawn.
+  test('POST /api/update/check reads the tags now and answers with them; an unreadable repo is 502', async () => {
+    git('tag', 'v60.0.0');
+    const r = await post('/api/update/check', {});
+    expect(r.status).toBe(200);
+    expect((await r.json()).update).toMatchObject({ latest: '60.0.0', available: true, repo: tags.root });
+    expect(await latest()).toBe('60.0.0'); // health carries it without a wait
+    renameSync(join(tags.root, '.git'), join(tags.root, '.git-off'));
+    try {
+      const bad = await post('/api/update/check', {});
+      expect(bad.status).toBe(502);
+      expect(await latest()).toBe('60.0.0'); // a failed check keeps the last good result
+    } finally { renameSync(join(tags.root, '.git-off'), join(tags.root, '.git')); }
+  }, 20000);
 });
 
 // The update pill starts a headless worker (POST /api/update) with the install brief; when its turn lands and the

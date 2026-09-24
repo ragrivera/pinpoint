@@ -1370,7 +1370,8 @@
   .dr-chat-ta{display:block;width:100%;box-sizing:border-box;resize:none;min-height:44px;max-height:50vh;height:72px;overflow-y:auto;background:transparent;border:0;border-radius:12px 12px 0 0;color:var(--dr-fg);padding:9px 11px 4px;font:13px/1.4 system-ui,sans-serif;cursor:text;scrollbar-width:thin;scrollbar-color:rgba(var(--dr-w),.18) transparent}
   .dr-chat-ta::-webkit-scrollbar{width:8px}.dr-chat-ta::-webkit-scrollbar-track{background:transparent}.dr-chat-ta::-webkit-scrollbar-thumb{background:rgba(var(--dr-w),.18);border-radius:4px}
   .dr-chat-hint{position:relative;padding:2px 14px 18px;font-size:11px;color:var(--dr-fg3b);line-height:1.6}
-  .dr-chat-ver{position:absolute;right:14px;top:7px;font:600 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--dr-fg3b);user-select:none} /* the version at the drawer's foot, on the shortcuts row so it costs no height */
+  .dr-chat-ver{position:absolute;right:14px;top:7px;margin:0;padding:0;border:0;background:transparent;font:600 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--dr-fg3b);user-select:none;cursor:pointer} /* the version at the drawer's foot, on the shortcuts row so it costs no height; a click checks for updates */
+  .dr-chat-ver:hover,.dr-chat-ver:focus-visible{color:var(--dr-fg)}.dr-chat-ver:focus-visible{outline:1px solid rgba(var(--dr-w),.3);outline-offset:3px;border-radius:3px}
   .dr-chat-tg{display:inline-flex;align-items:center;gap:6px;border:0;background:transparent;padding:2px 0;margin:0;color:var(--dr-fg3);font:600 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;cursor:pointer}
   .dr-chat-tg:hover{color:var(--dr-fg2)}
   .dr-chat-tg .chev{display:inline-block;width:5px;height:5px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-2px) rotate(45deg);transition:transform .22s cubic-bezier(.22,.61,.36,1)}
@@ -1759,7 +1760,7 @@
       const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); chatSave(); };
       window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
     });
-    const ver = el('div', 'dr-chat-ver'); chatEl._ver = ver; hint.append(ver); verSync(); // the pinpoint version this drawer talks to, bottom right
+    const ver = el('button', 'dr-chat-ver'); ver.type = 'button'; ver.onclick = checkUpdateNow; chatEl._ver = ver; hint.append(ver); verSync(); // the pinpoint version this drawer talks to, bottom right; a click checks for updates now
     chatEl.append(rz, hd, bar, updw, chatLs, chatSt, stage, inp, hint); document.body.appendChild(chatEl); renderChatPins(); chatApply();
   }
   // Full-screen preview of a transcript screenshot. Lives on document.body (outside the scaled drawer);
@@ -1990,7 +1991,7 @@
   // The version at the drawer's foot: the prelude's on load, then whatever /api/health says — a restarted server
   // names its new version there before the page is reloaded (the overlay itself stays the one that loaded).
   let chatVersion = BRAND.version ? String(BRAND.version) : '';
-  const verSync = () => { const v = chatEl && chatEl._ver; if (!v) return; v.textContent = chatVersion ? 'pinpoint ' + chatVersion : ''; v.title = chatVersion ? 'pinpoint-live ' + chatVersion + ' \u2014 the server this drawer talks to' : ''; };
+  const verSync = () => { const v = chatEl && chatEl._ver; if (!v) return; v.textContent = chatVersion ? 'pinpoint ' + chatVersion : ''; v.title = chatVersion ? 'pinpoint-live ' + chatVersion + ' \u2014 the server this drawer talks to. Click to check for updates' : ''; };
   const loadRoot = () => fetch(API + '/api/health').then((r) => r.json()).then((h) => { if (h && h.root) chatRoot = String(h.root); chatUpdate = h && h.update && h.update.available ? h.update : null; chatUpdating = h && h.updating ? String(h.updating) : null; chatPid = h && h.pid ? Number(h.pid) : 0; if (h && h.version && String(h.version) !== chatVersion) { chatVersion = String(h.version); verSync(); } updSync(); }).catch(() => {});
   // Newer pinpoint available? The server checks its package repo's tags (on start, every 4 hours, and on every worker
   // spawn or resume) and reports on /api/health and the prelude; the open drawer re-reads health with its conversation
@@ -1998,6 +1999,23 @@
   let chatUpdate = BRAND.update && BRAND.update.available ? BRAND.update : null;
   const UPD_KEY = BRAND.key + ':updDismissed'; // latest version the user dismissed with the pill's x: the pill stays hidden until a newer one shows up (an update in progress too: its conversation is still in the picker)
   const updSync = () => { const w = chatEl && chatEl._upd; if (!w) return; let seen = null; try { seen = localStorage.getItem(UPD_KEY); } catch (e) {} const show = !!chatUpdate && seen !== chatUpdate.latest; w.style.display = show ? '' : 'none'; if (!show) return; if (chatUpdating) { w._t.textContent = 'updating to ' + chatUpdate.latest + '\u2026'; w._go.title = 'A headless worker is installing pinpoint ' + chatUpdate.latest + ' \u2014 click to watch it'; return; } w._t.textContent = 'pinpoint ' + chatUpdate.latest + ' \u00b7 update'; w._go.title = 'Newer pinpoint: ' + chatUpdate.current + ' \u2192 ' + chatUpdate.latest + '. Click to update: a headless worker runs ' + chatUpdate.command + ', the server restarts on the new version, and the conversation ends with what changed.'; };
+  // The version label forces a tag check (POST /api/update/check) and shows the outcome for a few seconds. A newer
+  // version clears that version's dismissal, so the pill comes back: the reviewer just asked for it.
+  let verBusy = false;
+  async function checkUpdateNow() {
+    const v = chatEl && chatEl._ver; if (!v || verBusy) return;
+    verBusy = true; v.textContent = 'checking for updates\u2026'; v.title = '';
+    let said = 'check failed', why = '';
+    try {
+      const r = await fetch(API + '/api/update/check', { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 404) { said = 'restart server'; why = 'this pinpoint server predates the update check; restart it to enable it'; }
+      else if (!r.ok) { if (r.status === 409) said = 'checks off'; why = [j.error, j.hint].filter(Boolean).join(' \u2014 ') || 'HTTP ' + r.status; }
+      else { chatUpdate = j.update && j.update.available ? j.update : null; if (chatUpdate) { try { localStorage.removeItem(UPD_KEY); } catch (e) {} } updSync(); said = chatUpdate ? chatUpdate.latest + ' available' : 'up to date'; }
+    } catch (e) { why = e && e.message ? e.message : String(e); }
+    v.textContent = (chatVersion ? 'pinpoint ' + chatVersion + ' \u00b7 ' : '') + said; v.title = why;
+    setTimeout(() => { verBusy = false; verSync(); }, 4000);
+  }
   const shq = (s) => (/^[\w./-]+$/.test(s) ? s : "'" + s.replace(/'/g, "'\\''") + "'");
   const clipWrite = (text) => { const fb = () => { const ta = document.createElement('textarea'); ta.value = text; ta.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); let ok = false; try { ok = document.execCommand('copy'); } catch (err) {} ta.remove(); return ok; }; return navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(text).then(() => true, () => fb()) : Promise.resolve(fb()); };
   async function handoffConvo() {

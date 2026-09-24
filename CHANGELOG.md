@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Features
+- ✨ Click the `pinpoint X.Y.Z` version at the drawer's foot to check for updates now instead of waiting for
+  the next spawn or 4-hour check. It reads `checking for updates…`, then `up to date`, `X.Y.Z available`
+  (which brings back a pill you dismissed for that version), `checks off` or `check failed` for a few seconds,
+  with the reason on hover. `POST /api/update/check` runs the check, or joins the one already running, and
+  answers with the result (overlay, server)
+
+### Tests
+- ✅ `/api/update/check`: a tag pushed after start comes back at once and lands on `/api/health`, an
+  unreadable repo is `502` and keeps the last good result, and a server with checks off is `409` (server)
+
 ## [0.8.0] - 2026-09-11
 
 ### Features

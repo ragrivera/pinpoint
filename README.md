@@ -117,7 +117,8 @@ the worker brief then edits the artifact's authoring source, never app code. Not
 **Updates.** On server start, every 4 hours after that, and whenever a worker spawns or resumes, the server runs `git ls-remote --tags`
 on this package's repo (your own git credentials, so a private repo works) and compares the highest `vX.Y.Z` tag
 with the installed version. A newer one shows as a `pinpoint X.Y.Z · update` pill floating over the drawer's transcript
-(`×` dismisses that version) and as `update` on `/api/health`. Clicking the pill starts a headless UPDATE worker
+(`×` dismisses that version) and as `update` on `/api/health`. Clicking the version at the drawer's foot checks
+now (`POST /api/update/check`) and brings back a dismissed pill if that version is still the newest. Clicking the pill starts a headless UPDATE worker
 (`POST /api/update`): it runs the `bun add`, reads the new package's `CHANGELOG.md` and ends on a what's-new recap;
 the server then restarts itself onto the new version (the old process stays as a relay for its MCP stdio, so a Claude
 session keeps its pinpoint MCP) and the drawer reconnects on its own. `POST /api/restart` hands over without an
