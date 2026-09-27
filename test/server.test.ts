@@ -820,7 +820,7 @@ describe('update worker + self-restart', () => {
     // the brief reached the process: the exact command, the changelog to read, the recap block to end on
     let raw = '';
     await waitFor(async () => { raw = readdirSync(project.root).filter((n) => n.startsWith('stdin-')).map((n) => readFileSync(join(project.root, n), 'utf8')).join('\n'); return raw.includes('#v77.0.0'); }, 10000);
-    expect(raw).toContain('bun add -D github:ragrivera/pinpoint#v77.0.0');
+    expect(raw).toContain('bun add -D pinpoint-live@github:ragrivera/pinpoint#v77.0.0');
     expect(raw).toContain('CHANGELOG.md');
     expect(raw).toContain('```recap pinpoint ' + running + ' \u2192 77.0.0');
     expect(raw).toContain('restarts itself');

@@ -183,7 +183,7 @@ async function checkUpdate(): Promise<UpdateInfo | null> {
   const tags = out.split('\n').map((l) => l.split('refs/tags/')[1] || '').filter((t) => /^v?\d+\.\d+\.\d+$/.test(t)); // exactly vX.Y.Z: git allows ; | $ in tag names, and the tag reaches the update worker's brief as a command to run
   if (!tags.length) return null;
   const latest = tags.sort(semverCmp).pop()!.replace(/^v/, '');
-  const spec = gh ? `github:${gh[1]}#v${latest}` : `${pkg.name}@${latest}`;
+  const spec = gh ? `${pkg.name}@github:${gh[1]}#v${latest}` : `${pkg.name}@${latest}`; // the bare github: form hits DependencyLoop on bun 1.3.13
   return { current: pkg.version, latest, available: semverCmp(latest, pkg.version) > 0, checkedAt: new Date().toISOString(), repo: UPDATE_REPO, command: `bun add -D ${spec}` };
 }
 /** Check now (or join the check in flight); resolves to the fresh result, or null when the tags could not be read. */

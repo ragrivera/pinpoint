@@ -165,7 +165,7 @@ Run this whenever a repo has no Pinpoint pill yet (new project, a freshly cloned
 summary, then do the *Next* steps it prints:
 
 ```
-bun add -D pinpoint-live          # once per repo (or: bun add -D github:ragrivera/pinpoint)
+bun add -D pinpoint-live          # once per repo (or: bun add -D pinpoint-live@github:ragrivera/pinpoint)
 bun run pinpoint install [--root <repo>] [--port <n>] [--app <dir>]... [--dry-run]
 ```
 
