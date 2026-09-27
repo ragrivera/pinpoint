@@ -1428,6 +1428,7 @@
   .dr-chat-pins .it .rm{flex:none;width:20px;height:20px;border:0;border-radius:6px;background:transparent;color:var(--dr-fg3b);font:16px/20px system-ui,sans-serif;cursor:pointer;padding:0;opacity:0;align-self:center}
   .dr-chat-pins .it:hover .rm{opacity:1}.dr-chat-pins .it .rm:hover{background:rgba(255,90,95,.18);color:#ff5a5f}
   .dr-chat .m .pins{margin-top:6px;font:600 10px ui-monospace,Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;opacity:.75}
+  .dr-chat .m .pins:first-child{margin-top:0} /* a pins-only message: the chip sits on the '>' line, not 6px under it */
   .dr-chat .m .pins.x{opacity:1;text-transform:none;letter-spacing:0;font:12px/1.5 ui-monospace,Menlo,SFMono-Regular,monospace}
   .dr-chat .m .pins .ptg{display:inline-flex;align-items:center;gap:6px;margin:0;padding:3px 8px 3px 7px;border:1px solid rgba(var(--dr-w),.12);border-radius:999px;background:rgba(var(--dr-w),.05);color:var(--dr-fg2);font:600 10px/1.3 ui-monospace,Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;cursor:pointer}
   .dr-chat .m .pins .ptg:hover,.dr-chat .m .pins .ptg[aria-expanded="true"]{background:rgba(var(--dr-w),.1);color:var(--dr-fg)}.dr-chat .m .pins .ptg:focus-visible{outline:1px solid rgba(var(--dr-w),.4);outline-offset:2px}
