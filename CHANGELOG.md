@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.9.0] - 2026-09-28
 
 ### Features
 - ✨ Stop stops now. The drawer's Stop sends Claude's stream-json interrupt before closing stdin, so the turn in
