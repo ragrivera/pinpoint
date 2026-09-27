@@ -1358,6 +1358,7 @@
   .dr-chat .m.tool.err::before{content:'⎿';left:18px;color:#ff8a8e}
   .dr-chat .m.status{font-size:11px;color:var(--dr-fg3b)}
   .dr-chat .m.status.err{color:#ff8a8e}
+  .dr-chat .m.status.qd{margin:-2px 0 4px;color:#39d98a;font:600 9.5px/1.4 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;opacity:.8} /* a card answer: the card above holds the picks */
   .dr-chat .m.status.handoff{display:grid;grid-template-columns:auto 1fr;column-gap:10px;align-items:start;margin:6px 0 6px 18px;padding:9px 12px 10px 10px;border-radius:10px;background:rgba(var(--dr-w),.05);border:1px solid rgba(var(--dr-w),.1)}
   .dr-chat .m.status.handoff .hi{grid-row:1/3;width:26px;height:26px;display:grid;place-items:center;border-radius:7px;background:rgba(var(--dr-w),.08);color:var(--dr-fg);font:700 11px/1 ui-monospace,Menlo,monospace}
   .dr-chat .m.status.handoff b{color:var(--dr-fg);font-weight:600;font-size:12px;line-height:1.3}
@@ -1879,8 +1880,8 @@
   // A reviewer message settles every open question block above it (also on replay after a reload): lock
   // it and highlight what was sent per step, so a stale block cannot be answered twice.
   function lockQuestions(text) {
-    const all = String(text == null ? '' : text), lines = all.split('\n');
-    chatLs.querySelectorAll('.qa:not(.answered)').forEach((qa) => {
+    const all = String(text == null ? '' : text), lines = all.split('\n'), open = chatLs.querySelectorAll('.qa:not(.answered)');
+    open.forEach((qa) => {
       qa.classList.add('answered');
       const steps = [...qa.querySelectorAll('.qstep')];
       steps.forEach((st) => {
@@ -1905,12 +1906,28 @@
         if (inp && typed) { inp.value = typed; if (slot) slot.classList.add('on'); }
       });
     });
+    return open.length;
+  }
+  // An answer sent from the cards (the server tags its line with `answers`) is already on the card it settled — picks
+  // lit, typed text in place — so the transcript gets a one-line marker instead of every question echoed back. Only
+  // when a card is there to hold it: the live one just submitted, or an open one this line locks on replay. Otherwise
+  // (a /clear took the card, an older line without the tag) the message reads as the full bubble it always was.
+  let chatAnsPending = null;
+  function answeredLine(ev) {
+    const hh = ev.at && !isNaN(new Date(ev.at)) ? new Date(ev.at).toTimeString().slice(0, 8) : '';
+    const d = el('div', 'm status qd'); d.textContent = '\u2713 answered'; if (hh) d.dataset.at = hh;
+    d.title = ev.answers.map((x) => (x.q ? x.q + ' \u2192 ' : '') + x.a).join('\n'); return d;
   }
   function chatAppend(ev) {
     if (!chatLs) return; if (ev.t === 'status' && ev.closed) { if (chatEs) { chatEs.close(); chatEs = null; } dropConvo(chatUi.cur); return; } // closed (here or in another tab): leave it
     if (ev.t === 'status' && ev.reset) { chatLs.innerHTML = ''; chatAtBottom = true; snForget(chatUi.cur, Date.parse(ev.at)); return; } // /clear wipes the drawer transcript and the batch's pins: live, and on replay so a reload stays cleared
     if (ev.t === 'result' && ev.ok && !chatLs.firstElementChild) return; // the /clear turn's 'turn done' would be the only thing left on the blank slate
-    if (ev.t === 'user') lockQuestions(ev.text); const node = chatLine(ev); if (!node) return;
+    let node = null;
+    if (ev.t === 'user') {
+      const locked = lockQuestions(ev.text), pend = chatAnsPending && chatAnsPending.isConnected; chatAnsPending = null;
+      if (Array.isArray(ev.answers) && ev.answers.length && (locked || pend) && !(ev.pins && ev.pins.count) && !(ev.images && ev.images.length)) node = answeredLine(ev);
+    }
+    node = node || chatLine(ev); if (!node) return;
     if (ev.t === 'tool_error') { const last = [...chatLs.querySelectorAll('.m.tool:not(.err)')].pop(); if (last) last.classList.add('failed'); } // the failed call's dot turns red
     // A recap closes the stretch of work, so the transcript ends on it: the 'turn done' line that
     // follows one is noise. A failed turn still gets its row.
@@ -2178,12 +2195,13 @@
     const text = steps.length === 1 ? [answers[0].choice, answers[0].typed].filter(Boolean).join('\n')
       : steps.map((x, i) => (x.dataset.q || 'Q' + (i + 1)) + ' \u2192 ' + (answers[i].choice ? answers[i].choice + (answers[i].typed ? ' \u00b7 ' + answers[i].typed : '') : answers[i].typed)).join('\n');
     const slots = steps.map((x, i) => answers[i].typed ? x.querySelector('.qf') : null).filter(Boolean);
-    qa.classList.add('answered'); slots.forEach((f) => f.classList.add('on'));
+    const pairs = steps.map((x, i) => ({ q: x.dataset.q || (steps.length > 1 ? 'Q' + (i + 1) : ''), a: [answers[i].choice, answers[i].typed].filter(Boolean).join(steps.length === 1 ? '\n' : ' \u00b7 ') })); // tags the transcript line: the card stays the record
+    qa.classList.add('answered'); slots.forEach((f) => f.classList.add('on')); chatAnsPending = qa;
     try {
-      const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(chatUi.cur), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+      const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(chatUi.cur), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, answers: pairs }) });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error([j.error, j.hint].filter(Boolean).join(' \u2014 ') || String(r.status));
-    } catch (e) { qa.classList.remove('answered'); slots.forEach((f) => f.classList.remove('on')); chatAppend({ t: 'error', text: 'Send failed \u2014 ' + (e && e.message ? e.message : e), at: new Date().toISOString() }); }
+    } catch (e) { if (chatAnsPending === qa) chatAnsPending = null; qa.classList.remove('answered'); slots.forEach((f) => f.classList.remove('on')); chatAppend({ t: 'error', text: 'Send failed \u2014 ' + (e && e.message ? e.message : e), at: new Date().toISOString() }); }
   }
   async function chatSubmit() {
     if (!chatTa) return;

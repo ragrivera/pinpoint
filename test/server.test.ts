@@ -515,6 +515,24 @@ describe('Stop from the overlay', () => {
     expect(user.pins.rows).toEqual([expect.objectContaining({ n: 2, comment: 'too tight', near: { path: 'main > div', text: 'Card' } })]);
     expect(user.pins.rows[0].state).toBeUndefined();
   }, 30000);
+
+  // An answer from the drawer's question cards is tagged on its transcript line, so the drawer can let the answered card
+  // stand as the record instead of echoing every question back as a message. The worker still gets the full text.
+  test('an answer sent from question cards is tagged with its question/answer pairs; junk is dropped', async () => {
+    const id = await sendBatch('quick one');
+    await waitFor(async () => (await row(id)).state === 'idle', 10000);
+    const text = 'Which surface? → Desktop\nWhich tone? → Warm · but not cute';
+    const answers = [{ q: 'Which surface?', a: 'Desktop' }, { q: 'Which tone?', a: 'Warm · but not cute' }, { q: 7, a: null }, 'nope'];
+    expect((await sPost(`/api/chat/${id}`, { text, answers })).status).toBe(200);
+    await waitFor(async () => transcript(id).some((e: any) => e.t === 'user'), 5000);
+    const user = transcript(id).find((e: any) => e.t === 'user');
+    expect(user.text).toBe(text);
+    expect(user.answers).toEqual([{ q: 'Which surface?', a: 'Desktop' }, { q: 'Which tone?', a: 'Warm · but not cute' }]);
+    await waitFor(async () => stdinOf(id).includes('Which tone?'), 5000); // the worker is handed the full text, as before
+    expect((await sPost(`/api/chat/${id}`, { text: 'plain message' })).status).toBe(200);
+    await waitFor(async () => transcript(id).filter((e: any) => e.t === 'user').length === 2, 5000);
+    expect(transcript(id).filter((e: any) => e.t === 'user')[1].answers).toBeUndefined();
+  }, 30000);
 });
 
 describe('MCP follower', () => {

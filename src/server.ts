@@ -598,6 +598,11 @@ const withImages = (text: string, refs: ImgRef[], blocks: Array<Record<string, u
   ].filter(Boolean);
   return [{ type: 'text', text: `${text}\n\n(${notes.join(' ')})` }, ...blocks];
 };
+// An answer from the drawer's question cards arrives with its question/answer pairs beside the text. The text goes to the
+// worker as ever; the pairs tag the transcript line, so the drawer lets the answered card stand as the record instead of
+// echoing every question back as a message. Anything that is not a { q, a } pair of strings is dropped.
+type QA = { q: string; a: string };
+const cardAnswers = (raw: unknown): QA[] => (Array.isArray(raw) ? raw : []).filter((x: any) => x && typeof x.q === 'string' && typeof x.a === 'string').slice(0, 12).map((x: any) => ({ q: x.q.slice(0, 500), a: x.a.slice(0, 2000) }));
 const publicRefs = (refs: ImgRef[]) => refs.map(({ url, name, type, bytes, img }) => ({ url, name, type, bytes, img: img !== false && Boolean(IMG_EXT[type]) }));
 class Worker {
   proc: ReturnType<typeof Bun.spawn> | null = null;
@@ -626,12 +631,12 @@ class Worker {
   }
   setState(state: WState, extra?: Record<string, unknown>) { this.rec.state = state; this.saveRec(); this.emit({ t: 'status', state, ...(extra || {}) }); }
   /** Reviewer message (+ screenshots, + pins already appended to this batch): echoed to the transcript, then fed to the worker (spawning / resuming it if needed). */
-  send(text: string, images?: unknown, pins?: PinAppend, page?: string) {
+  send(text: string, images?: unknown, pins?: PinAppend, page?: string, answers?: QA[]) {
     this.recapAsked = false; // a real message: this conversation earns another recap when it next goes quiet
     const { refs, blocks } = saveFiles(this.rec.batchId, images);
     const withPins = Boolean(pins && pins.count > 0);
     // The chip keeps what the pins held (and the page they were sent from), so the drawer can open it without the batch file.
-    this.emit({ t: 'user', text, images: publicRefs(refs), ...(withPins ? { pins: { first: pins!.first, count: pins!.count, ...(page ? { page } : {}), rows: pinCards(pins!.rows as ReturnType<typeof pinRows>) } } : {}) });
+    this.emit({ t: 'user', text, images: publicRefs(refs), ...(answers && answers.length ? { answers } : {}), ...(withPins ? { pins: { first: pins!.first, count: pins!.count, ...(page ? { page } : {}), rows: pinCards(pins!.rows as ReturnType<typeof pinRows>) } } : {}) });
     this.sendRaw(withImages(withPins ? followUpPrompt(text, this.rec.batchId, pins!) : text, refs, blocks));
   }
   sendRaw(content: UserContent) {
@@ -1139,7 +1144,7 @@ try {
             if (typeof j?.model === 'string') w.setModel(j.model); // the pill moved while the message was being typed
             if (typeof j?.effort === 'string') w.setEffort(j.effort);
             const added = appendPins(id, j?.pins); // pins from the drawer join this batch before the worker hears about them
-            w.send((text || (added.count ? 'See the new pins.' : 'See the attached screenshot.')).slice(0, 20_000), j?.images, added, typeof j?.page === 'string' ? j.page.slice(0, 500) : '');
+            w.send((text || (added.count ? 'See the new pins.' : 'See the attached screenshot.')).slice(0, 20_000), j?.images, added, typeof j?.page === 'string' ? j.page.slice(0, 500) : '', cardAnswers(j?.answers));
             return Response.json({ ok: true, state: w.rec.state, pins: added.count, total: added.total }, { headers: CORS });
           } catch (e: any) { const st = e instanceof PinError ? e.status : 500; log('chat refused', st, e?.message); return Response.json({ ok: false, error: String(e?.message || e), hint: e?.hint ?? null }, { status: st, headers: CORS }); }
         }
