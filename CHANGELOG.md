@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.9.1] - 2026-09-28
 
 ### Fixes
 - 💄 A pins-only message's `📌 N pins` chip sits on the `>` prompt line instead of 6px under it (overlay)
