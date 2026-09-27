@@ -276,7 +276,16 @@
   @media(prefers-reduced-motion:reduce){.dr-sn .t .pins i.working{animation:none}}
   .dr-sn .t .mn:hover{background:rgba(var(--dr-w),.08);color:var(--dr-fg)}
   .dr-sn .t.err{border-color:rgba(255,90,95,.45)}.dr-sn .t.ok .bar i{width:100%}
-  .dr-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483601;background:#1d2229;color:#fff;padding:10px 16px;border-radius:999px;font:600 13px system-ui,sans-serif;box-shadow:0 12px 30px rgba(0,0,0,.35)}`;
+  .dr-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483601;background:#1d2229;color:#fff;padding:10px 16px;border-radius:999px;font:600 13px system-ui,sans-serif;box-shadow:0 12px 30px rgba(0,0,0,.35)}
+  /* Host form-control guard. No shadow DOM, so a host's global control rule can out-rank ours: OrgSpace's
+     body:not(:has(.hal-app)) :is(input,select,textarea) sets min-height:44px + font-size:16px at (0,4,2), beating
+     (0,3,0) rules here. :not(#_pp) adds id weight (1,x,x) so each control re-asserts its own box + type. */
+  .dr-pop textarea:not(#_pp){font:13px/1.4 system-ui,sans-serif;letter-spacing:normal;text-transform:none;padding:8px 10px;min-height:64px;height:auto;max-height:none}
+  .dr-pop textarea.fix:not(#_pp){min-height:44px}
+  .dr-fp-bd textarea:not(#_pp){font:12px/1.4 system-ui,sans-serif;letter-spacing:normal;text-transform:none;padding:8px 10px;min-height:56px;height:auto;max-height:none}
+  .dr-dock-fly input[type=range]:not(#_pp){padding:0;margin:0;min-height:auto;height:24px;max-height:none}
+  .dr-dock-fly .tints input[type=color]:not(#_pp){padding:0;width:26px;min-height:auto;height:26px;max-height:none}
+  .dr-dock-fly .tints .hex:not(#_pp){font:11px ui-monospace,Menlo,monospace;letter-spacing:normal;text-transform:none;padding:0 7px;width:68px;min-height:auto;height:26px;max-height:none}`;
   const st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
 
   const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
@@ -1417,7 +1426,11 @@
   .dr-lb img{max-width:100%;max-height:calc(100% - 34px);width:auto;height:auto;object-fit:contain;border-radius:10px;box-shadow:0 30px 80px rgba(0,0,0,.6);transition:transform .28s cubic-bezier(.22,.61,.36,1)}.dr-lb:not(.on) img{transform:scale(.96)}
   .dr-lb .cap{display:flex;gap:14px;align-items:center;font:11px ui-monospace,Menlo,monospace;color:rgba(255,255,255,.7);cursor:default}
   .dr-lb .cap a{color:#fff;text-decoration:none;padding:3px 9px;border-radius:999px;background:rgba(255,255,255,.12)}.dr-lb .cap a:hover{background:rgba(255,255,255,.22)}
-  @media (prefers-reduced-motion:reduce){.dr-lb,.dr-lb img{transition:none}}`;
+  @media (prefers-reduced-motion:reduce){.dr-lb,.dr-lb img{transition:none}}
+  /* Host form-control guard: same reason and :not(#_pp) booster as the one closing the main css. */
+  .dr-chat-sel .rn-in:not(#_pp){font:inherit;letter-spacing:normal;text-transform:none;padding:1px 6px;margin:0;min-height:auto;height:auto;max-height:none}
+  .dr-chat .m .qi:not(#_pp){font:12px/1.4 ui-monospace,Menlo,SFMono-Regular,monospace;letter-spacing:normal;text-transform:none;padding:7px 10px;min-height:auto;height:auto;max-height:none}
+  .dr-chat-ta:not(#_pp){font:13px/1.4 system-ui,sans-serif;letter-spacing:normal;text-transform:none;padding:9px 11px 4px;min-height:44px;height:72px;max-height:50vh}`;
   let chatLs = null, chatTa = null, chatSel = null, chatSt = null, chatSendBtn = null, chatStopBtn = null, chatTermBtn = null, chatModel = null, chatEffort = null, chatEs = null, chatConvos = [], chatPoll = null, chatAtBottom = true;
   let chatAtt = null, chatFiles = []; // pending attachments: { name, type, data (base64), img, preview?, w?, h?, size? }
   const IMG_MAX_EDGE = 1600, IMG_MAX = 6, FILE_MAX_BYTES = 6_000_000;
