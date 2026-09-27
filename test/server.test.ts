@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { BIN, cleanEnv, freePort, mcpClient, tmpProject, waitFor } from './helpers.ts';
+import { BIN, cleanEnv, freePort, mcpClient, replay, tmpProject, waitFor } from './helpers.ts';
 
 const APP_ORIGIN = 'http://acme.localhost:5173';
 let port: number;
@@ -22,6 +22,16 @@ beforeAll(async () => {
     '.docs/pinpoint/workers/old-batch.json': JSON.stringify({ batchId: 'old-batch', workerId: 'w1', sessionUuid: '00000000-0000-0000-0000-000000000000', page: `${APP_ORIGIN}/home`, title: 'Home', state: 'idle', started: true, startedAt: '2026-01-01T00:00:00.000Z', lastAt: '2026-01-01T00:00:00.000Z', turns: 1, costUsd: 0 }),
     // a second revived conversation, so the model tests do not depend on the close test's ordering
     '.docs/pinpoint/workers/model-batch.json': JSON.stringify({ batchId: 'model-batch', workerId: 'w2', sessionUuid: '00000000-0000-0000-0000-000000000002', page: `${APP_ORIGIN}/home`, title: 'Home', state: 'exited', started: true, startedAt: '2026-01-01T00:00:00.000Z', lastAt: '2026-01-01T00:00:00.000Z', turns: 1, costUsd: 0 }),
+    // a transcript from before pin chips carried their pins: only { first, count } on each line, the pins themselves in
+    // the saved batch — which a /clear (the reset line) emptied, so only the chip after it matches what the batch holds now
+    '.docs/pinpoint/workers/pins-batch.json': JSON.stringify({ batchId: 'pins-batch', workerId: 'w3', sessionUuid: '00000000-0000-0000-0000-000000000003', page: `${APP_ORIGIN}/home`, title: 'Home', state: 'exited', started: true, startedAt: '2026-01-01T00:00:00.000Z', lastAt: '2026-01-01T00:00:00.000Z', turns: 2, costUsd: 0 }),
+    '.docs/pinpoint/workers/pins-batch.chat.jsonl': [
+      { at: '2026-01-01T00:00:00.000Z', t: 'batch', pins: 1, general: 'first look', page: `${APP_ORIGIN}/home`, title: 'Home', images: [] },
+      { at: '2026-01-01T00:01:00.000Z', t: 'user', text: 'See the new pins.', images: [], pins: { first: 2, count: 1 } },
+      { at: '2026-01-01T00:02:00.000Z', t: 'status', state: 'idle', reset: true, pins: 2 },
+      { at: '2026-01-01T00:03:00.000Z', t: 'user', text: 'See the new pins.', images: [], pins: { first: 1, count: 1 } },
+    ].map((e) => JSON.stringify(e)).join('\n') + '\n',
+    '.docs/pinpoint/feedback/pins-batch.claimed-w3.json': JSON.stringify({ id: 'pins-batch', receivedAt: '2026-01-01T00:00:00.000Z', page: `${APP_ORIGIN}/home`, title: 'Home', general: 'first look', pins: [{ type: 'bug', comment: 'after the clear', rect: { x: 1, y: 2, w: 3, h: 4 }, element: { tag: 'a', path: 'nav > a', text: 'Home' } }], to: 'w3', claimedBy: 'w3' }),
   });
   base = `http://127.0.0.1:${port}`;
   writeFileSync(openStub(), '#!/bin/sh\nprintf "%s\\n" "$@" >> "$0.log"\n', { mode: 0o755 });
@@ -82,6 +92,15 @@ describe('HTTP owner', () => {
     // the transcript keeps the command, so the drawer shows it again after a reload
     const lines = readFileSync(join(project.root, '.docs', 'pinpoint', 'workers', 'old-batch.chat.jsonl'), 'utf8').trim().split('\n');
     expect(JSON.parse(lines[lines.length - 1])).toMatchObject({ t: 'status', handoff: true, command: j.command });
+  });
+  test('an old transcript replays its pin chips with the pins filled in from the batch, but only after the last /clear', async () => {
+    const evs = await replay(base, 'pins-batch');
+    const users = evs.filter((e: any) => e.t === 'user');
+    expect(users[0].pins).toEqual({ first: 2, count: 1 }); // before the reset: the batch no longer holds that pin, so no rows
+    expect(evs.find((e: any) => e.t === 'batch').rows).toBeUndefined(); // nor the original pin
+    expect(users[1].pins.rows).toEqual([expect.objectContaining({ n: 1, type: 'bug', comment: 'after the clear', element: { tag: 'a', path: 'nav > a', text: 'Home' } })]);
+    // the file on disk is not rewritten: the rows are filled in on the way out
+    expect(readFileSync(join(project.root, '.docs', 'pinpoint', 'workers', 'pins-batch.chat.jsonl'), 'utf8')).not.toContain('after the clear');
   });
   test('close drops a worker conversation and parks its record so a restart does not revive it', async () => {
     let chats = await (await fetch(base + '/api/chat')).json();
@@ -477,6 +496,24 @@ describe('Stop from the overlay', () => {
     expect(evs.find((e: any) => e.t === 'status' && e.stopping)).toMatchObject({ stopping: 'model change' });
     expect(evs.find((e: any) => e.t === 'status' && e.stopping).user).toBeUndefined();
     expect(evs.filter((e: any) => e.t === 'status' && e.state === 'exited').pop().stopped).toBeUndefined();
+  }, 30000);
+
+  // The pin chip on a message opens to show what each pin held, so the transcript line has to carry the pins.
+  test('the first message and every later one carry what their pins hold: comment, target, page', async () => {
+    const pin = { type: 'bug', comment: 'overlaps <the> logo', fix: 'nudge it', rect: { x: 1, y: 2, w: 3, h: 4 }, element: { tag: 'button', path: 'main > button', text: 'Save' }, state: { route: '/home' }, scrollY: 40 };
+    const id = await sendBatch('look', [pin]);
+    await waitFor(async () => (await row(id)).state === 'idle', 10000);
+    const first = transcript(id).find((e: any) => e.t === 'batch');
+    expect(first.pins).toBe(1); // still the count older drawers read
+    expect(first.rows).toEqual([expect.objectContaining({ n: 1, type: 'bug', comment: 'overlaps <the> logo', fix: 'nudge it', element: { tag: 'button', path: 'main > button', text: 'Save' }, rect: { x: 1, y: 2, w: 3, h: 4 }, scrollY: 40 })]);
+    expect(first.rows[0].state).toBe('{"route":"/home"}'); // app state rides along as a capped string
+    const near = { rect: { x: 5, y: 6, w: 70, h: 80 }, element: null, near: { path: 'main > div', text: 'Card' }, type: '', comment: 'too tight', fix: '', state: null, scrollY: 0 };
+    expect((await sPost(`/api/chat/${id}`, { text: 'more', pins: [near], page: `${ORIGIN}/settings` })).status).toBe(200);
+    await waitFor(async () => transcript(id).some((e: any) => e.t === 'user'), 5000);
+    const user = transcript(id).find((e: any) => e.t === 'user');
+    expect(user.pins).toMatchObject({ first: 2, count: 1, page: `${ORIGIN}/settings` });
+    expect(user.pins.rows).toEqual([expect.objectContaining({ n: 2, comment: 'too tight', near: { path: 'main > div', text: 'Card' } })]);
+    expect(user.pins.rows[0].state).toBeUndefined();
   }, 30000);
 });
 

@@ -65,3 +65,22 @@ export function mcpClient(env: Record<string, string>, cwd: string) {
   };
   return { proc, call, tool, kill: () => { try { proc.kill(); } catch {} } };
 }
+
+/** A conversation's transcript as the drawer receives it: the SSE replay up to its `sync` line. */
+export async function replay(base: string, id: string): Promise<any[]> {
+  const ac = new AbortController();
+  const r = await fetch(`${base}/api/chat/${encodeURIComponent(id)}/events`, { signal: ac.signal });
+  const dec = new TextDecoder(); let buf = ''; const out: any[] = [];
+  try {
+    for await (const chunk of r.body as unknown as AsyncIterable<Uint8Array>) {
+      buf += dec.decode(chunk, { stream: true }); let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const block = buf.slice(0, i); buf = buf.slice(i + 2);
+        const data = block.split('\n').filter((l) => l.startsWith('data: ')).map((l) => l.slice(6)).join('\n');
+        if (!data) continue;
+        const ev = JSON.parse(data); if (ev.t === 'sync') return out; out.push(ev);
+      }
+    }
+  } finally { ac.abort(); }
+  return out;
+}

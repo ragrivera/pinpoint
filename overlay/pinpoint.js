@@ -1427,6 +1427,23 @@
   .dr-chat-pins .it .rm{flex:none;width:20px;height:20px;border:0;border-radius:6px;background:transparent;color:var(--dr-fg3b);font:16px/20px system-ui,sans-serif;cursor:pointer;padding:0;opacity:0;align-self:center}
   .dr-chat-pins .it:hover .rm{opacity:1}.dr-chat-pins .it .rm:hover{background:rgba(255,90,95,.18);color:#ff5a5f}
   .dr-chat .m .pins{margin-top:6px;font:600 10px ui-monospace,Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;opacity:.75}
+  .dr-chat .m .pins.x{opacity:1;text-transform:none;letter-spacing:0;font:12px/1.5 ui-monospace,Menlo,SFMono-Regular,monospace}
+  .dr-chat .m .pins .ptg{display:inline-flex;align-items:center;gap:6px;margin:0;padding:3px 8px 3px 7px;border:1px solid rgba(var(--dr-w),.12);border-radius:999px;background:rgba(var(--dr-w),.05);color:var(--dr-fg2);font:600 10px/1.3 ui-monospace,Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;cursor:pointer}
+  .dr-chat .m .pins .ptg:hover,.dr-chat .m .pins .ptg[aria-expanded="true"]{background:rgba(var(--dr-w),.1);color:var(--dr-fg)}.dr-chat .m .pins .ptg:focus-visible{outline:1px solid rgba(var(--dr-w),.4);outline-offset:2px}
+  .dr-chat .m .pins .ptg .chev{display:inline-block;width:4px;height:4px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-1px) rotate(-45deg);transition:transform .18s cubic-bezier(.22,.61,.36,1)}
+  .dr-chat .m .pins .ptg[aria-expanded="true"] .chev{transform:translateY(-2px) rotate(45deg)}
+  .dr-chat .m .pins .pbd{margin-top:6px;padding:8px 10px;border-radius:10px;background:rgba(0,0,0,.22);border:1px solid rgba(var(--dr-w),.1)}
+  .dr-chat .m .pins .pbd[hidden]{display:none}
+  .dr-chat .m .pins .pg{margin-bottom:6px;color:var(--dr-fg3b);font-size:10.5px;overflow-wrap:anywhere}
+  .dr-chat .m .pins ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+  .dr-chat .m .pins li{display:flex;gap:8px;align-items:flex-start}.dr-chat .m .pins li+li{padding-top:8px;border-top:1px solid rgba(var(--dr-w),.07)}
+  .dr-chat .m .pins li .n{flex:none;min-width:20px;height:20px;padding:0 4px;box-sizing:border-box;border-radius:99px;background:#ff5a5f;color:#fff;font:700 10px/20px system-ui;text-align:center}
+  .dr-chat .m .pins li .pb{flex:1;min-width:0}
+  .dr-chat .m .pins .pk{font:600 9.5px/1.4 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--dr-fg3b)}
+  .dr-chat .m .pins .pc{margin:1px 0 4px;color:var(--dr-fg);white-space:pre-wrap;overflow-wrap:anywhere}.dr-chat .m .pins .pc i{color:var(--dr-fg3b)}
+  .dr-chat .m .pins dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:11px}
+  .dr-chat .m .pins dt{color:var(--dr-fg3b)}.dr-chat .m .pins dd{margin:0;min-width:0;color:var(--dr-fg2);overflow-wrap:anywhere}
+  @media (prefers-reduced-motion:reduce){.dr-chat .m .pins .ptg .chev{transition:none}}
   .dr-lb{position:fixed;inset:0;z-index:2147483647;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:32px;box-sizing:border-box;background:rgba(0,0,0,.78);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);cursor:zoom-out;opacity:0;transition:opacity .18s ease}.dr-lb.on{opacity:1}
   .dr-lb img{max-width:100%;max-height:calc(100% - 34px);width:auto;height:auto;object-fit:contain;border-radius:10px;box-shadow:0 30px 80px rgba(0,0,0,.6);transition:transform .28s cubic-bezier(.22,.61,.36,1)}.dr-lb:not(.on) img{transform:scale(.96)}
   .dr-lb .cap{display:flex;gap:14px;align-items:center;font:11px ui-monospace,Menlo,monospace;color:rgba(255,255,255,.7);cursor:default}
@@ -1445,7 +1462,27 @@
   const imgsHtml = (imgs) => Array.isArray(imgs) && imgs.length ? `<div class="imgs">${imgs.map((i) => (i.img === false
     ? `<a class="doc" href="${esc(API + i.url)}" target="_blank" rel="noopener" title="${esc(i.name || '')}">${fileTileHtml(i.name)}</a>`
     : `<img src="${esc(API + i.url)}" alt="${esc(i.name || '')}" title="${esc(i.name || '')}">`)).join('')}</div>` : '';
-  const pinsHtml = (p) => p && p.count ? `<div class="pins">📌 ${p.count} pin${p.count === 1 ? '' : 's'} · #${p.first}${p.count > 1 ? '–#' + (p.first + p.count - 1) : ''}</div>` : '';
+  // A pin chip that carries its pins (rows, from 0.9.0 servers — and filled in on replay for older lines) is a toggle that
+  // opens to what each pin held: the note, the fix, what it was pinned on, where. A count-only chip stays a plain label.
+  let pinsSeq = 0;
+  const pinRowHtml = (r) => {
+    const kv = (k, v) => (v ? `<dt>${k}</dt><dd>${v}</dd>` : ''), e = r.element, nr = r.near, rc = r.rect, sr = r.source;
+    const on = e ? `<code>${esc(e.tag || '')}</code> ${esc(e.path || '')}` : nr ? `an area near ${esc(nr.path || '')}` : rc ? 'a drawn area' : '';
+    const txt = (e && e.text) || (nr && nr.text) || '';
+    return `<li><span class="n">${esc(r.n)}</span><div class="pb"><div class="pk">${esc(r.type || 'note')}${e ? ' · ' + esc(e.tag || '') : nr ? ' · area' : ''}</div><div class="pc">${r.comment ? esc(r.comment) : '<i>no comment</i>'}</div><dl>`
+      + kv('fix', r.fix ? esc(r.fix) : '') + kv('on', on) + kv('text', txt ? '\u201c' + esc(txt) + '\u201d' : '')
+      + kv('source', sr && sr.file ? pathHtml(sr.file + (sr.line ? ':' + sr.line + (sr.column ? ':' + sr.column : '') : '')) : '') + kv('widget', r.widget ? esc(r.widget) : '')
+      + kv('box', rc ? esc(Math.round(rc.w) + '\u00d7' + Math.round(rc.h) + ' at ' + Math.round(rc.x) + ',' + Math.round(rc.y)) + (r.scrollY ? ' \u00b7 scrolled ' + esc(Math.round(r.scrollY)) + 'px' : '') : '')
+      + kv('state', r.state ? `<code>${esc(r.state)}</code>` : '') + '</dl></div></li>';
+  };
+  const pinsHtml = (p) => {
+    if (!p || !p.count) return '';
+    const label = `📌 ${p.count} pin${p.count === 1 ? '' : 's'} · #${p.first}${p.count > 1 ? '–#' + (p.first + p.count - 1) : ''}`;
+    if (!Array.isArray(p.rows) || !p.rows.length) return `<div class="pins">${label}</div>`;
+    let pg = p.page || ''; try { if (pg) { const u = new URL(pg); pg = u.pathname + u.search + u.hash; } } catch (e) {}
+    const id = 'dr-pins-' + ++pinsSeq;
+    return `<div class="pins x"><button type="button" class="ptg" aria-expanded="false" aria-controls="${id}" title="Show what these pins hold"><i class="chev" aria-hidden="true"></i>${label}</button><div class="pbd" id="${id}" hidden>${pg ? `<div class="pg">sent from ${esc(pg)}</div>` : ''}<ol>${p.rows.map(pinRowHtml).join('')}</ol></div></div>`;
+  };
   // Any file can ride along. An image is downscaled and sent inline, because that is the only way the
   // model can see it; everything else is sent as-is and lands as a path the worker can Read.
   function addFile(file) {
@@ -1761,6 +1798,7 @@
       const t = e.target; if (t instanceof HTMLImageElement && t.closest('.imgs')) return openLightbox(t.src, t.alt, t.getBoundingClientRect());
       const cp = t instanceof Element ? t.closest('.cp') : null; if (cp) { const pre = cp.parentElement && cp.parentElement.querySelector('pre'); copyText(pre ? pre.textContent : '', cp); return; }
       const pth = t instanceof Element ? t.closest('.pth') : null; if (pth) { reveal(pth); return; }
+      const ptg = t instanceof Element ? t.closest('.pins .ptg') : null; if (ptg) { const bd = ptg.nextElementSibling, open = ptg.getAttribute('aria-expanded') !== 'true'; ptg.setAttribute('aria-expanded', String(open)); if (bd) bd.hidden = !open; return; } // a button: Enter and Space click it too
       const qb = t instanceof Element ? t.closest('.qb') : null;
       // The choices and the text field are two ways to answer the SAME question, so the last one
       // used wins: tapping clears what was typed, and typing (below) clears the tap. Sending both
@@ -1814,7 +1852,7 @@
     const n = (cls, html) => { const d = el('div', 'm ' + cls); d.innerHTML = html; if (hh) d.dataset.at = hh; return d; };
     switch (ev.t) {
       case 'batch': if (ev.update) return n('status handoff', '<span class="hi" aria-hidden="true">&uarr;</span><b>Updating pinpoint ' + esc(ev.update.from) + ' \u2192 ' + esc(ev.update.to) + '</b><span class="sub">A headless worker runs <code>' + esc(ev.update.command || '') + '</code>; when it is done the server restarts on the new version, and the recap below says what changed.</span>'); // an update conversation opens on what it is doing, not on a note
-        return n('user', md(ev.general || '') + pinsHtml(ev.pins ? { count: ev.pins, first: 1 } : null) + imgsHtml(ev.images)); // the note that started the worker reads like any later message
+        return n('user', md(ev.general || '') + pinsHtml(ev.pins ? { count: ev.pins, first: 1, rows: ev.rows, page: ev.page } : null) + imgsHtml(ev.images)); // the note that started the worker reads like any later message
       case 'user': return n('user', md(ev.text) + pinsHtml(ev.pins) + imgsHtml(ev.images));
       case 'assistant': { const t = noStamp(ev.text); return t.trim() ? n('ai', md(t)) : null; }
       case 'tool': return n('tool', `<span class="tn">${esc(String(ev.name || '').replace(/^mcp__pinpoint__/, 'pinpoint:'))}</span>${ev.summary ? '(<span class="ts">' + esc(ev.summary) + '</span>)' : ''}`);
@@ -2157,7 +2195,7 @@
     const consumePins = () => { if (pins.length) { state.pins = []; save(); closePop(); } };
     try {
       if (chatUi.cur) {
-        const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(chatUi.cur), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, images, pins, model: modelPref(), effort: effortPref() }) });
+        const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(chatUi.cur), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, images, pins, page: location.href, model: modelPref(), effort: effortPref() }) });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error([j.error, j.hint].filter(Boolean).join(' — ') || String(r.status));
         if (pins.length) {

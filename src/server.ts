@@ -337,7 +337,7 @@ function receive(input: Omit<Batch, 'id' | 'receivedAt'> & { images?: unknown })
     writeFileSync(join(FEEDBACK_DIR, `${id}.claimed-${workerId}.json`), JSON.stringify(b, null, 2));
     const w = new Worker({ batchId: id, workerId, sessionUuid: crypto.randomUUID(), page: b.page, title: b.title, state: 'starting', started: false, startedAt: ts.toISOString(), lastAt: ts.toISOString(), turns: 0, costUsd: 0, model, effort });
     workers.set(id, w);
-    w.emit({ t: 'batch', pins: b.pins.length, general: b.general || '', page: b.page, title: b.title, images: publicRefs(refs) });
+    w.emit({ t: 'batch', pins: b.pins.length, ...(b.pins.length ? { rows: pinCards(pinRows(b.pins)) } : {}), general: b.general || '', page: b.page, title: b.title, images: publicRefs(refs) });
     w.sendRaw(withImages(batchPrompt(b, w.rec.sessionUuid), refs, blocks));
     log('pins received', id, `${b.pins.length} pin(s)`, `→ worker ${workerId}`);
     if (flutterPage(b.page)) flutterBus.emit({ t: 'sent', id, pins: b.pins.length }); // `pinpoint flutter` polls the batch and hot-reloads on completion
@@ -484,6 +484,9 @@ function toolSummary(name: string, input: any): string {
 }
 const flat = (c: unknown): string => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((x: any) => (x && x.type === 'text' ? x.text : '')).join('\n') : '');
 const pinRows = (pins: unknown[], offset = 0) => (pins as any[]).map((p, i) => ({ n: offset + i + 1, type: p?.type || '', comment: p?.comment || '', fix: p?.fix || '', element: p?.element ? { tag: p.element.tag, path: p.element.path, text: p.element.text } : undefined, near: p?.near, rect: p?.rect, scrollY: p?.scrollY, source: p?.source && p.source.file ? { file: String(p.source.file), line: Number(p.source.line) || 0, column: Number(p.source.column) || 0 } : undefined, widget: p?.widget ? String(p.widget) : undefined, state: p?.state ?? undefined }));
+// What a pin chip in the transcript opens to: the rows the worker was handed, with the app's state object flattened to a
+// capped string (it is whatever window.__designReviewState returns, and every transcript line is replayed on each open).
+const pinCards = (rows: ReturnType<typeof pinRows>) => rows.map(({ state, ...r }) => ({ ...r, ...(state != null ? { state: JSON.stringify(state).slice(0, 600) } : {}) }));
 // ROOT as one shell word — bare when safe, single-quoted otherwise. The brief's resume command and handoff() share it.
 const ROOT_SH = /^[\w./-]+$/.test(ROOT) ? ROOT : `'${ROOT.replace(/'/g, "'\\''")}'`;
 function batchPrompt(b: Batch, session = ''): string {
@@ -623,11 +626,12 @@ class Worker {
   }
   setState(state: WState, extra?: Record<string, unknown>) { this.rec.state = state; this.saveRec(); this.emit({ t: 'status', state, ...(extra || {}) }); }
   /** Reviewer message (+ screenshots, + pins already appended to this batch): echoed to the transcript, then fed to the worker (spawning / resuming it if needed). */
-  send(text: string, images?: unknown, pins?: PinAppend) {
+  send(text: string, images?: unknown, pins?: PinAppend, page?: string) {
     this.recapAsked = false; // a real message: this conversation earns another recap when it next goes quiet
     const { refs, blocks } = saveFiles(this.rec.batchId, images);
     const withPins = Boolean(pins && pins.count > 0);
-    this.emit({ t: 'user', text, images: publicRefs(refs), ...(withPins ? { pins: { first: pins!.first, count: pins!.count } } : {}) });
+    // The chip keeps what the pins held (and the page they were sent from), so the drawer can open it without the batch file.
+    this.emit({ t: 'user', text, images: publicRefs(refs), ...(withPins ? { pins: { first: pins!.first, count: pins!.count, ...(page ? { page } : {}), rows: pinCards(pins!.rows as ReturnType<typeof pinRows>) } } : {}) });
     this.sendRaw(withImages(withPins ? followUpPrompt(text, this.rec.batchId, pins!) : text, refs, blocks));
   }
   sendRaw(content: UserContent) {
@@ -832,6 +836,22 @@ function listChats() {
     return { id: w.rec.batchId, page: w.rec.page, title: w.rec.title, state: w.rec.state, session: w.rec.sessionUuid, model: w.rec.model || '', effort: w.rec.effort || '', startedAt: w.rec.startedAt, lastAt: w.rec.lastAt, turns: w.rec.turns, costUsd: Math.round(w.rec.costUsd * 1000) / 1000, pins, general, kind: w.rec.kind || '', update: w.rec.update || null };
   });
 }
+// Transcripts written before chips carried their pins hold only { first, count }: fill the rows in from the saved batch
+// on the way out (the file is not rewritten), so an old chip opens too. Only after the last /clear, which emptied the
+// batch and numbered the next pins from #1 again — before it, the numbers point at pins the batch no longer has.
+function withPinRows(id: string, evs: ChatEvent[]): ChatEvent[] {
+  let reset = -1; evs.forEach((e, i) => { if (e.t === 'status' && e.reset) reset = i; });
+  let pins: unknown[] | null = null;
+  const saved = () => { if (pins) return pins; try { const f = findSaved(id); pins = f ? (JSON.parse(readFileSync(f, 'utf8')) as Batch).pins : []; } catch { pins = []; } return pins; };
+  const rows = (first: number, count: number) => { const l = saved().slice(first - 1, first - 1 + count); return l.length === count ? pinCards(pinRows(l, first - 1)) : null; };
+  return evs.map((e, i) => {
+    if (i < reset) return e;
+    const p = e.pins as any;
+    if (e.t === 'user' && p && typeof p === 'object' && !p.rows && p.count > 0) { const r = rows(Number(p.first) || 1, Number(p.count)); return r ? { ...e, pins: { ...p, rows: r } } : e; }
+    if (e.t === 'batch' && typeof p === 'number' && p > 0 && !e.rows) { const r = rows(1, p); return r ? { ...e, rows: r } : e; }
+    return e;
+  });
+}
 function sse(w: Worker, req: Request, headers: Record<string, string>) {
   let sub: ((e: ChatEvent) => void) | null = null; let hb: ReturnType<typeof setInterval> | null = null;
   const stream = new ReadableStream<Uint8Array>({
@@ -839,7 +859,7 @@ function sse(w: Worker, req: Request, headers: Record<string, string>) {
       const enc = new TextEncoder();
       const push = (e: unknown) => { try { c.enqueue(enc.encode(`data: ${JSON.stringify(e)}\n\n`)); } catch {} };
       c.enqueue(enc.encode('retry: 2000\n\n'));
-      for (const e of w.history()) push(e);
+      for (const e of withPinRows(w.rec.batchId, w.history())) push(e);
       push({ t: 'sync', at: new Date().toISOString(), state: w.rec.state });
       sub = push; w.subs.add(sub);
       hb = setInterval(() => { try { c.enqueue(enc.encode(': hb\n\n')); } catch {} }, 20_000);
@@ -1119,7 +1139,7 @@ try {
             if (typeof j?.model === 'string') w.setModel(j.model); // the pill moved while the message was being typed
             if (typeof j?.effort === 'string') w.setEffort(j.effort);
             const added = appendPins(id, j?.pins); // pins from the drawer join this batch before the worker hears about them
-            w.send((text || (added.count ? 'See the new pins.' : 'See the attached screenshot.')).slice(0, 20_000), j?.images, added);
+            w.send((text || (added.count ? 'See the new pins.' : 'See the attached screenshot.')).slice(0, 20_000), j?.images, added, typeof j?.page === 'string' ? j.page.slice(0, 500) : '');
             return Response.json({ ok: true, state: w.rec.state, pins: added.count, total: added.total }, { headers: CORS });
           } catch (e: any) { const st = e instanceof PinError ? e.status : 500; log('chat refused', st, e?.message); return Response.json({ ok: false, error: String(e?.message || e), hint: e?.hint ?? null }, { status: st, headers: CORS }); }
         }
