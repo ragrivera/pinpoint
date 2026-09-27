@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixes
 - 💄 A pins-only message's `📌 N pins` chip sits on the `>` prompt line instead of 6px under it (overlay)
+- 🐛 The drawer's update pill works again on bun 1.3.13: the update command is now
+  `bun add -D pinpoint-live@github:<owner>/<repo>#vX.Y.Z`, because the bare `github:<owner>/<repo>#vX.Y.Z` form fails
+  with `DependencyLoop`. The README and skill install examples use the same form (server, docs)
 
 ## [0.9.0] - 2026-09-28
 

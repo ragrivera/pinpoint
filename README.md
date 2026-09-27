@@ -21,7 +21,7 @@ npm/pnpm/yarn), Claude Code ≥ 2.1 on `PATH`, macOS or Linux.
 ## Quick start
 
 ```sh
-bun add -D pinpoint-live            # or: bun add -D github:ragrivera/pinpoint
+bun add -D pinpoint-live            # or: bun add -D pinpoint-live@github:ragrivera/pinpoint
 bun run pinpoint install
 ```
 
