@@ -1267,6 +1267,11 @@
   .dr-chat-stop{flex:none;width:28px;height:28px;display:grid;place-items:center;border:1px solid rgba(255,90,95,.35);background:rgba(255,90,95,.1);border-radius:999px;padding:0;cursor:pointer}
   .dr-chat-stop::before{content:'';width:9px;height:9px;border-radius:2px;background:#ff8a8e}
   .dr-chat-stop:hover{background:rgba(255,90,95,.22)}
+  /* Clicked: the square turns into a ring that spins until the worker has exited. It stays clickable — a second click kills it outright. */
+  .dr-chat-stop.stopping{background:rgba(255,90,95,.2);border-color:rgba(255,90,95,.6);box-shadow:inset 0 1px 3px rgba(0,0,0,.35);cursor:progress}
+  .dr-chat-stop.stopping::before{width:10px;height:10px;border-radius:50%;background:transparent;border:2px solid rgba(255,138,142,.35);border-top-color:#ff8a8e;animation:dr-stop-spin .8s linear infinite}
+  @keyframes dr-stop-spin{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion:reduce){.dr-chat-stop.stopping::before{animation:none;border-color:#ff8a8e;border-top-color:transparent}}
   .dr-chat-mw{flex:none;position:relative}
   .dr-chat-lt,.dr-chat-rt{display:flex;align-items:center;gap:6px;min-width:0}
   .dr-chat-rt .dr-chat-send{margin-left:5px}
@@ -1361,7 +1366,7 @@
   .dr-chat .m.result.err{color:#ff8a8e;text-transform:none}
   .dr-chat .m kbd{font:10px ui-monospace,Menlo,monospace;background:rgba(var(--dr-w),.08);border:1px solid rgba(var(--dr-w),.14);border-radius:4px;padding:1px 5px}
   .dr-chat-st{padding:8px 16px 4px;font:10px ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--dr-fg3b);min-height:14px}
-  .dr-chat-st.working,.dr-chat-st.starting{color:#ffb457}.dr-chat-st.idle{color:#39d98a}.dr-chat-st.error,.dr-chat-st.disconnected{color:#ff8a8e}
+  .dr-chat-st.working,.dr-chat-st.starting{color:#ffb457}.dr-chat-st.stopping{color:#ff8a8e}.dr-chat-st.idle{color:#39d98a}.dr-chat-st.error,.dr-chat-st.disconnected{color:#ff8a8e}
   .dr-chat-in{position:relative;padding:10px 12px 6px;border-top:1px solid rgba(var(--dr-w),.07)}
   .dr-chat-slash{position:absolute;left:12px;right:12px;bottom:calc(100% + 4px);z-index:1;max-height:280px;overflow-y:auto;background:rgba(var(--dr-g),.97);border:1px solid rgba(var(--dr-w),.12);border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,.4);padding:4px;scrollbar-width:thin;scrollbar-color:rgba(var(--dr-w),.18) transparent}
   .dr-chat-slash .it{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:baseline;padding:6px 8px;border-radius:6px;cursor:pointer}
@@ -1642,7 +1647,7 @@
     selMenu.addEventListener('click', (e) => { const it = e.target.closest('.it'); if (!it || it.classList.contains('dis') || e.target.closest('.rn-in')) return; if (e.target.closest('.rn')) { renameConvo(it); return; } if (e.target.closest('.cl')) { closeConvo(it, e.target.closest('.cl')); return; } menuClose(); selectConvo(it.dataset.id || null); });
     chatSel.append(selTg, selMenu); chatSel._tg = selTg; chatSel._menu = selMenu; selSync(); // placeholder label until the list loads
     chatStopBtn = el('button', 'dr-chat-stop'); chatStopBtn.type = 'button'; chatStopBtn.setAttribute('aria-label', 'Stop the worker'); chatStopBtn.title = 'Stop — end this worker process now (your next message resumes the same session)';
-    chatStopBtn.onclick = () => { if (chatUi.cur) fetch(API + BRAND.chat + '/' + encodeURIComponent(chatUi.cur) + '/stop', { method: 'POST' }).catch(() => {}); };
+    chatStopBtn.onclick = stopConvo;
     chatTermBtn = el('button', 'dr-chat-term', '&gt;_'); chatTermBtn.type = 'button'; chatTermBtn.setAttribute('aria-label', 'Continue in a terminal'); chatTermBtn.title = 'Continue in a terminal — copies the claude --resume command for this conversation and ends the worker';
     chatTermBtn.onclick = () => handoffConvo();
     bar.append(chatSel); loadRoot(); // every action lives in the composer row below
@@ -1814,13 +1819,14 @@
       case 'assistant': { const t = noStamp(ev.text); return t.trim() ? n('ai', md(t)) : null; }
       case 'tool': return n('tool', `<span class="tn">${esc(String(ev.name || '').replace(/^mcp__pinpoint__/, 'pinpoint:'))}</span>${ev.summary ? '(<span class="ts">' + esc(ev.summary) + '</span>)' : ''}`);
       case 'tool_error': return n('tool err', esc(ev.text));
-      case 'result': return n('result' + (ev.ok ? '' : ' err'), ev.ok ? `turn done · ${Math.round((ev.ms || 0) / 1000)}s${ev.cost ? ' · $' + Number(ev.cost).toFixed(2) : ''}` : 'turn failed · ' + esc(ev.text || ev.subtype || ''));
+      case 'result': if (ev.stopped) return n('result', 'turn stopped'); return n('result' + (ev.ok ? '' : ' err'), ev.ok ? `turn done · ${Math.round((ev.ms || 0) / 1000)}s${ev.cost ? ' · $' + Number(ev.cost).toFixed(2) : ''}` : 'turn failed · ' + esc(ev.text || ev.subtype || ''));
       case 'status':
         if (ev.compacted) return n('status', 'context compacted' + (ev.pre ? ' · ' + (ev.pre / 1000).toFixed(1) + 'k → ' + (ev.post / 1000).toFixed(1) + 'k tokens' : ''));
         if (ev.handoff) return n('status handoff', '<span class="hi" aria-hidden="true">&gt;_</span><b>Handed off to a terminal</b><span class="sub">The resume command is on your clipboard — paste it in a terminal to carry this session on there. A message here starts a new worker on the same session.</span>');
         if (ev.modelSet) return n('status', 'model \u2192 ' + esc(modelLabel(ev.model)) + ' — the worker restarts on it, resuming this session');
         if (ev.effortSet) return n('status', 'effort \u2192 ' + esc(effortLabel(ev.effort)) + ' — the worker restarts on it, resuming this session');
-        // idle-recap, stopping and exited say nothing the header status line does not: they stay out of the transcript
+        if (ev.stopped && ev.state === 'exited') return n('status', 'stopped \u00b7 your next message resumes this session'); // the reviewer's Stop landed: say so where they are reading
+        // idle-recap, stopping and a plain exit say nothing the header status line does not: they stay out of the transcript
         if (ev.note) return n('status', esc(ev.text)); // a line the drawer itself adds (the restart came back, say)
         if (ev.restarting) return n('status', 'restarting the pinpoint server on ' + esc(ev.to || '') + '\u2026 the drawer reconnects on its own');
         if (ev.state === 'starting') return n('status', ev.resume ? 'resuming the worker session…' : 'starting a worker…');
@@ -1889,13 +1895,41 @@
       m.classList.toggle('rc-only', old && solo);
     });
   }
+  // Stopping lasts from the click (or the server's `stopping` line) until the worker has gone: the header says so and
+  // the button spins, whatever status lines pass in between. A settled state or another conversation ends it.
+  let chatStopping = false, chatState = null, chatStateEv = null;
+  function stopSync() {
+    if (!chatStopBtn) return;
+    chatStopBtn.classList.toggle('stopping', chatStopping);
+    chatStopBtn.setAttribute('aria-label', chatStopping ? 'Stopping the worker \u2014 click again to kill it now' : 'Stop the worker');
+    chatStopBtn.title = chatStopping ? 'Stopping\u2026 click again to kill the worker now' : 'Stop \u2014 cancel what the worker is doing and end its process (your next message resumes the same session)';
+  }
   function chatStatus(state, ev) {
     if (!chatSt) return;
+    if (ev && ev.stopping) chatStopping = true;
+    if (!state || state === 'exited' || state === 'error' || state === 'connecting' || (state === 'idle' && chatState !== 'idle' && !(ev && ev.stopping))) chatStopping = false; // idle only as a change: a Stop clicked while idle keeps its look until the exit
+    chatState = state; chatStateEv = ev || null;
     const map = { connecting: 'connecting…', starting: ev && ev.resume ? 'resuming worker…' : 'starting worker…', working: 'working…', idle: 'idle — your turn', exited: 'worker exited · a message resumes it', error: 'worker error', disconnected: 'stream lost — retrying', restarting: 'restarting the server\u2026' };
-    chatSt.textContent = state ? map[state] || state : '';
-    chatSt.className = 'dr-chat-st ' + (state || '');
+    chatSt.textContent = chatStopping ? 'stopping\u2026' : state ? map[state] || state : '';
+    chatSt.className = 'dr-chat-st ' + (chatStopping ? 'stopping' : state || '');
     if (chatStopBtn) chatStopBtn.style.display = state === 'working' || state === 'idle' || state === 'starting' ? '' : 'none';
     if (chatTermBtn) chatTermBtn.style.display = state ? '' : 'none';
+    stopSync();
+  }
+  // Stop: the look changes on the click, before the server answers. The server interrupts the turn in flight and ends
+  // the process; a second click while that is under way kills it outright. A failed request puts the button back.
+  async function stopConvo() {
+    const id = chatUi.cur; if (!id) return;
+    chatStopping = true; chatStatus(chatState, chatStateEv);
+    try {
+      const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(id) + '/stop', { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error([j.error, j.hint].filter(Boolean).join(' \u2014 ') || 'HTTP ' + r.status);
+      if (j.stop === 'none' && chatUi.cur === id) { chatStopping = false; chatStatus(chatState, null); } // nothing was running: the stream's next status settles the header
+    } catch (e) {
+      if (chatUi.cur === id) { chatStopping = false; chatStatus(chatState, null); }
+      chatAppend({ t: 'error', text: 'Stop failed \u2014 ' + (e && e.message ? e.message : e), at: new Date().toISOString() });
+    }
   }
   const convoParts = (c) => { let path = c.page; try { path = new URL(c.page).pathname; } catch (e) {} const t = new Date(c.startedAt || c.lastAt); const hh = isNaN(t) ? '' : t.toTimeString().slice(0, 5); if (c.kind === 'update' && c.update) return { lb: `${hh} \u2191 pinpoint ${c.update.from} \u2192 ${c.update.to}`, pins: 'update', st: String(c.state || '') }; return { lb: `${hh} ${path}`, pins: c.pins ? c.pins + ' pin' + (c.pins === 1 ? '' : 's') : 'note', st: String(c.state || '') }; };
   // How long an idle conversation has before the server closes it (worker.idleMinutes). The countdown

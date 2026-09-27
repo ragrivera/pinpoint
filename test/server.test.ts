@@ -350,6 +350,136 @@ describe('worker dispatch spawns claude with the picked model', () => {
   }, 30000);
 });
 
+// Stop from the drawer. Closing stdin alone lets claude run the turn in flight to its end (tool calls and all), so the
+// reviewer's Stop sends the stream-json interrupt first. The stub behaves like claude -p does (checked against 2.1.283):
+// a message saying LONGTURN starts a turn that only an interrupt ends — control_response, then an error_during_execution
+// result — and EOF then exits 1. STUBBORN ignores the interrupt and EOF alike, so only a kill ends it.
+describe('Stop from the overlay', () => {
+  const ORIGIN = 'http://stop.localhost:5173';
+  let sPort: number;
+  let sProject: ReturnType<typeof tmpProject>;
+  let sOwner: ReturnType<typeof Bun.spawn>;
+  let sBase: string;
+
+  beforeAll(async () => {
+    sPort = await freePort();
+    sProject = tmpProject({
+      'fake-claude.sh': [
+        '#!/bin/sh',
+        'd="$(dirname "$0")"',
+        'printf \'%s\\n\' "$@" > "$d/argv-$$.txt"',
+        'echo \'{"type":"system","subtype":"init","model":"stub"}\'',
+        'stubborn=0',
+        'while IFS= read -r line; do',
+        '  printf \'%s\\n\' "$line" >> "$d/stdin-$$.txt"',
+        '  case "$line" in',
+        '    *\'"subtype":"interrupt"\'*)',
+        '      [ $stubborn = 1 ] && continue',
+        '      echo \'{"type":"control_response","response":{"subtype":"success","request_id":"x","response":{"still_queued":[]}}}\'',
+        '      echo \'{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"The user doesn\'"\'"\'t want to proceed with this tool use."}]}}\'',
+        '      echo \'{"type":"result","subtype":"error_during_execution","is_error":true,"duration_ms":5,"num_turns":1,"total_cost_usd":0}\' ;;',
+        '    *STUBBORN*) stubborn=1; echo \'{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"sleep 600"}}]}}\' ;;',
+        '    *LONGTURN*) echo \'{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"sleep 600"}}]}}\' ;;',
+        '    *) echo \'{"type":"result","subtype":"success","is_error":false,"duration_ms":1,"num_turns":1,"total_cost_usd":0}\' ;;',
+        '  esac',
+        'done',
+        '[ $stubborn = 1 ] && i=0 && while [ $i -lt 30 ]; do sleep 1; i=$((i+1)); done', // bounded, so a failing run never leaves one behind
+        'exit 1',
+      ].join('\n') + '\n',
+    });
+    writeFileSync(join(sProject.root, '.pinpoint.json'), JSON.stringify({ port: sPort, name: 'stop', dispatch: 'worker', claudeBin: join(sProject.root, 'fake-claude.sh'), apps: [{ dir: '.', origin: ORIGIN }] }));
+    Bun.spawnSync(['chmod', '+x', join(sProject.root, 'fake-claude.sh')]);
+    sBase = `http://127.0.0.1:${sPort}`;
+    sOwner = Bun.spawn(['bun', BIN, 'serve'], { cwd: sProject.root, env: cleanEnv({ PINPOINT_ROOT: sProject.root, PINPOINT_ROLE: 'http', PINPOINT_DETACHED: '1', PINPOINT_NO_UPDATE_CHECK: '1' }), stdout: 'ignore', stderr: 'pipe' });
+    await waitFor(async () => (await fetch(sBase + '/api/health')).ok, 15000);
+  }, 20000);
+  afterAll(() => { try { sOwner.kill(); } catch {} sProject.rm(); });
+
+  const sPost = (path: string, body: unknown) => fetch(sBase + path, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: ORIGIN }, body: JSON.stringify(body) });
+  const sendBatch = async (general: string, pins: unknown[] = []) => {
+    const r = await sPost('/api/pins', { page: `${ORIGIN}/home`, title: 'Home', general, pins, to: 'worker' });
+    expect(r.status).toBe(200);
+    return (await r.json()).id as string;
+  };
+  const row = async (id: string) => (await (await fetch(sBase + '/api/chat')).json()).find((c: any) => c.id === id);
+  const transcript = (id: string) => readFileSync(join(sProject.root, '.docs', 'pinpoint', 'workers', `${id}.chat.jsonl`), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  /** The stdin the stub recorded for this batch's process (its prompt names the batch id). */
+  const stdinOf = (id: string) => readdirSync(sProject.root).filter((n) => n.startsWith('stdin-')).map((n) => readFileSync(join(sProject.root, n), 'utf8')).find((t) => t.includes(id)) || '';
+  const working = (id: string) => waitFor(async () => (await row(id)).state === 'working' && stdinOf(id).length > 0, 10000);
+
+  test('Stop interrupts the turn in flight before closing stdin: the worker exits at once, as stopped rather than failed', async () => {
+    const id = await sendBatch('LONGTURN please');
+    await working(id);
+    const t0 = Date.now();
+    const r = await sPost(`/api/chat/${id}/stop`, {});
+    expect(r.status).toBe(200);
+    expect((await r.json()).stop).toBe('stopping');
+    await waitFor(async () => (await row(id)).state === 'exited', 2500, 50); // well inside the 3s kill: the interrupt did it
+    expect(Date.now() - t0).toBeLessThan(2500);
+    const lines = stdinOf(id).trim().split('\n').map((l) => JSON.parse(l));
+    const last = lines[lines.length - 1];
+    expect(last).toMatchObject({ type: 'control_request', request: { subtype: 'interrupt' } });
+    expect(typeof last.request_id).toBe('string');
+    const evs = transcript(id);
+    const at = evs.findIndex((e: any) => e.t === 'status' && e.stopping);
+    expect(evs[at]).toMatchObject({ stopping: 'stopped from the overlay', user: true });
+    const after = evs.slice(at + 1);
+    expect(after.find((e: any) => e.t === 'result')).toMatchObject({ ok: false, stopped: true }); // "turn stopped", not "turn failed"
+    expect(after.some((e: any) => e.t === 'tool_error')).toBe(false); // the cancelled tool call is not a failure to report
+    expect(after.some((e: any) => e.t === 'status' && e.state === 'idle')).toBe(false); // no "your turn" flash on the way out
+    expect(after.find((e: any) => e.t === 'status' && e.state === 'exited')).toMatchObject({ stopped: true, code: 1 });
+    expect(after.some((e: any) => e.t === 'status' && e.state === 'error')).toBe(false);
+    // the next message resumes the same session and is answered like any other: nothing left in flight
+    expect((await sPost(`/api/chat/${id}`, { text: 'carry on' })).status).toBe(200);
+    await waitFor(async () => (await row(id)).state === 'idle', 10000);
+    expect(transcript(id).filter((e: any) => e.t === 'result').pop()).toMatchObject({ ok: true });
+  }, 30000);
+
+  test('a second Stop while the first is under way kills the process at once', async () => {
+    const id = await sendBatch('STUBBORN please');
+    await working(id);
+    expect((await (await sPost(`/api/chat/${id}/stop`, {})).json()).stop).toBe('stopping');
+    await Bun.sleep(300);
+    expect((await row(id)).state).toBe('working'); // it ignored the interrupt and EOF
+    const t0 = Date.now();
+    expect((await (await sPost(`/api/chat/${id}/stop`, {})).json()).stop).toBe('killed');
+    await waitFor(async () => (await row(id)).state === 'exited', 2000, 50);
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(transcript(id).filter((e: any) => e.t === 'status' && e.state === 'exited').pop()).toMatchObject({ stopped: true });
+  }, 30000);
+
+  test('one Stop on a process that ignores it is killed about 3s later, not 15s', async () => {
+    const id = await sendBatch('STUBBORN again');
+    await working(id);
+    const t0 = Date.now();
+    await sPost(`/api/chat/${id}/stop`, {});
+    await waitFor(async () => (await row(id)).state === 'exited', 8000, 100);
+    const took = Date.now() - t0;
+    expect(took).toBeGreaterThanOrEqual(2500);
+    expect(took).toBeLessThan(6000);
+  }, 30000);
+
+  test('Stop on a conversation with no process says so', async () => {
+    const id = await sendBatch('quick one');
+    await waitFor(async () => (await row(id)).state === 'idle', 10000);
+    await sPost(`/api/chat/${id}/stop`, {});
+    await waitFor(async () => (await row(id)).state === 'exited', 5000, 50);
+    expect((await (await sPost(`/api/chat/${id}/stop`, {})).json()).stop).toBe('none');
+  }, 30000);
+
+  test("the server's own stops (a model change) close stdin without an interrupt, and are not marked stopped", async () => {
+    const id = await sendBatch('quick one');
+    await waitFor(async () => (await row(id)).state === 'idle', 10000);
+    expect((await sPost(`/api/chat/${id}/model`, { model: 'haiku' })).status).toBe(200);
+    await waitFor(async () => (await row(id)).state === 'exited', 10000);
+    expect(stdinOf(id)).not.toContain('"interrupt"');
+    const evs = transcript(id);
+    expect(evs.find((e: any) => e.t === 'status' && e.stopping)).toMatchObject({ stopping: 'model change' });
+    expect(evs.find((e: any) => e.t === 'status' && e.stopping).user).toBeUndefined();
+    expect(evs.filter((e: any) => e.t === 'status' && e.state === 'exited').pop().stopped).toBeUndefined();
+  }, 30000);
+});
+
 describe('MCP follower', () => {
   let mcp: ReturnType<typeof mcpClient>;
   beforeAll(() => { mcp = mcpClient({ PINPOINT_SESSION: 'pinpoint_acme', PINPOINT_SESSION_ID: 'mcp1' }, project.root); });

@@ -604,6 +604,7 @@ class Worker {
   private recapAsked = false; // one final-recap prompt per idle stretch, never a loop
   private killTimer: ReturnType<typeof setTimeout> | null = null;
   private stopping = false; // stdin already closed: the exit is on its way, do not ask twice
+  private userStop = false; // the reviewer's Stop ended this process: its exit reads as stopped, not as a failure
   private spawnedModel = ''; // the --model this process actually started with
   private spawnedEffort = ''; // ditto --effort: both only change on a restart
   private inflight = 0; // messages written but not yet answered — never end a process holding one
@@ -663,7 +664,7 @@ class Worker {
         stdin: 'pipe', stdout: 'pipe', stderr: 'pipe',
       });
     } catch (e) { this.proc = null; this.setState('error', { text: `spawn failed: ${String((e as any)?.message || e)}` }); return; }
-    this.rec.started = true; this.announced = false; this.stopping = false; this.inflight = 0;
+    this.rec.started = true; this.announced = false; this.stopping = false; this.userStop = false; this.inflight = 0;
     this.setState('starting', { resume, pid: this.proc.pid });
     log(`worker ${this.rec.workerId} ${resume ? 'resumed' : 'started'} pid ${this.proc.pid} for ${this.rec.batchId}`);
     void this.pump(this.proc.stdout as ReadableStream<Uint8Array>, (l) => this.onLine(l));
@@ -673,8 +674,8 @@ class Worker {
       if (this.proc !== p) return;
       this.proc = null; this.clearIdle(); if (this.killTimer) { clearTimeout(this.killTimer); this.killTimer = null; }
       this.rec.exitCode = code;
-      const clean = code === 0 || this.rec.state === 'idle';
-      this.setState(clean ? 'exited' : 'error', { code });
+      const clean = code === 0 || this.rec.state === 'idle' || this.userStop; // an interrupted claude exits 1, and a killed one on a signal
+      this.setState(clean ? 'exited' : 'error', { code, ...(this.userStop ? { stopped: true } : {}) });
       log(`worker ${this.rec.workerId} exited ${code}`);
       if (this.queue.length) this.start(true); // a message arrived while it was shutting down
     });
@@ -711,12 +712,13 @@ class Worker {
           else if (c.type === 'tool_use') this.emit({ t: 'tool', name: c.name, summary: toolSummary(String(c.name), c.input) });
         }
         break;
-      case 'user': // tool results echo back as user turns; surface only failures
-        for (const c of Array.isArray(m.message?.content) ? m.message.content : []) if (c.type === 'tool_result' && c.is_error) this.emit({ t: 'tool_error', text: flat(c.content).slice(0, 300) });
+      case 'user': // tool results echo back as user turns; surface only failures (not the call a Stop cancelled)
+        for (const c of Array.isArray(m.message?.content) ? m.message.content : []) if (c.type === 'tool_result' && c.is_error && !this.userStop) this.emit({ t: 'tool_error', text: flat(c.content).slice(0, 300) });
         break;
       case 'result':
         this.rec.turns += 1; this.rec.costUsd += Number(m.total_cost_usd || 0); this.inflight = Math.max(0, this.inflight - 1);
-        this.emit({ t: 'result', ok: !m.is_error, subtype: m.subtype, ms: m.duration_ms, cost: m.total_cost_usd, turns: m.num_turns, text: m.is_error ? String(m.result || m.error || 'error') : '' });
+        this.emit({ t: 'result', ok: !m.is_error, subtype: m.subtype, ms: m.duration_ms, cost: m.total_cost_usd, turns: m.num_turns, text: m.is_error ? String(m.result || m.error || 'error') : '', ...(this.userStop ? { stopped: true } : {}) });
+        if (this.userStop) break; // the turn a Stop cancelled: the exit follows, so no "your turn" in between and nothing to arm
         this.setState('idle');
         if (this.recapAsked) this.stop('idle timeout'); else this.armIdle(); // the recap was the last turn
         this.applyPicks(); // picked mid-turn: end the process now so the next message starts on it
@@ -765,19 +767,34 @@ class Worker {
     if (!this.proc || !this.stalePicks() || this.inflight) return;
     this.stop(this.spawnedModel === (this.rec.model || '') ? 'effort change' : 'model change');
   }
-  /** Close stdin so Claude ends the conversation; a later message resumes it by session id. */
-  stop(reason: string) {
+  /** Close stdin so Claude ends the conversation; a later message resumes it by session id. Closing stdin lets the turn
+   *  in flight run to its end, tool calls and all, which suits the server's own stops: the idle timeout (never cut off the
+   *  recap), a model or effort change, a restart, a handoff. The reviewer's Stop (`user`) cannot wait on that: it first
+   *  writes the stream-json interrupt control request (what the Agent SDK's interrupt() sends; claude answers with a
+   *  control_response and ends the turn with an error_during_execution result, the running tool cancelled), and the
+   *  kill behind it drops from 15s to 3s. A second Stop while one is under way kills outright.
+   *  Returns what happened: 'none' (no process), 'stopping', or 'killed'. */
+  stop(reason: string, user = false): 'none' | 'stopping' | 'killed' {
     this.clearIdle();
-    if (!this.proc || this.stopping) return;
-    this.stopping = true;
-    this.emit({ t: 'status', state: this.rec.state, stopping: reason });
     const p = this.proc;
+    if (!p) return 'none';
+    if (this.stopping) {
+      if (!user) return 'stopping';
+      this.userStop = true;
+      this.emit({ t: 'status', state: this.rec.state, stopping: 'killed from the overlay', user: true, kill: true });
+      try { p.kill(); } catch {}
+      return 'killed';
+    }
+    this.stopping = true; this.userStop = user;
+    this.emit({ t: 'status', state: this.rec.state, stopping: reason, ...(user ? { user: true } : {}) });
+    if (user) { try { (p.stdin as any).write(JSON.stringify({ type: 'control_request', request_id: `stop-${Date.now().toString(36)}`, request: { subtype: 'interrupt' } }) + '\n'); (p.stdin as any).flush(); } catch {} }
     try { (p.stdin as any).end(); } catch {}
-    this.killTimer = setTimeout(() => { if (this.proc === p) { try { p.kill(); } catch {} } }, 15_000);
+    this.killTimer = setTimeout(() => { if (this.proc === p) { try { p.kill(); } catch {} } }, user ? 3_000 : 15_000);
+    return 'stopping';
   }
   /** Close the conversation for good: end the process (if any), drop it from /api/chat and park the record so a restart does not bring it back. */
   close(reason: string) {
-    this.stop(reason);
+    this.stop(reason, true); // the drawer asks "stop?" before closing a running worker: the reviewer meant it, so interrupt
     const live = this.recFile; this.closed = true;
     try { if (existsSync(live)) renameSync(live, this.recFile); else this.saveRec(); } catch {}
     workers.delete(this.rec.batchId);
@@ -1079,7 +1096,7 @@ try {
           return new Response(Bun.file(path), { headers: { ...CORS, 'Cache-Control': 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff', ...(asFile ? { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="${file}"` } : {}) } });
         }
         if (cm[2] === 'events' && req.method === 'GET') return sse(w, req, CORS);
-        if (cm[2] === 'stop' && req.method === 'POST') { w.stop('stopped from the overlay'); return Response.json({ ok: true }, { headers: CORS }); }
+        if (cm[2] === 'stop' && req.method === 'POST') return Response.json({ ok: true, stop: w.stop('stopped from the overlay', true) }, { headers: CORS });
         if (cm[2] === 'close' && req.method === 'POST') { w.close('closed from the overlay'); return Response.json({ ok: true }, { headers: CORS }); }
         if (cm[2] === 'handoff' && req.method === 'POST') return Response.json({ ok: true, ...w.handoff() }, { headers: CORS });
         if (cm[2] === 'model' && req.method === 'POST') {
