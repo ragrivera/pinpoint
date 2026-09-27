@@ -33,7 +33,8 @@ bun run pinpoint install
    (root, `apps/*`, `packages/*`);
 3. writes the project-scope MCP server into `.mcp.json` (`bun run pinpoint serve`) so every Claude Code session
    opened in the repo starts it;
-4. copies the `/pinpoint` skill to `.claude/skills/pinpoint/SKILL.md`;
+4. copies the `/pinpoint` skill to `.claude/skills/pinpoint/SKILL.md` (and refreshes it whenever the packaged one
+   differs: on a re-install, when the pinpoint server starts, and after an update from the drawer);
 5. ignores `.docs/pinpoint/` (batches, worker transcripts, logs).
 
 Then restart your Vite dev server, (re)start Claude Code in the repo (approve the `pinpoint` MCP server when
@@ -120,7 +121,7 @@ with the installed version. A newer one shows as a `pinpoint X.Y.Z · update` pi
 (`×` dismisses that version) and as `update` on `/api/health`. Clicking the version at the drawer's foot checks
 now (`POST /api/update/check`) and brings back a dismissed pill if that version is still the newest. Clicking the pill starts a headless UPDATE worker
 (`POST /api/update`): it runs the `bun add`, reads the new package's `CHANGELOG.md` and ends on a what's-new recap;
-the server then restarts itself onto the new version (the old process stays as a relay for its MCP stdio, so a Claude
+the server refreshes `.claude/skills/pinpoint/SKILL.md` from the new package (left uncommitted, like the lockfile), then restarts itself onto the new version (the old process stays as a relay for its MCP stdio, so a Claude
 session keeps its pinpoint MCP) and the drawer reconnects on its own. `POST /api/restart` hands over without an
 update. The check never delays a spawn; `"updateCheck": false` or `PINPOINT_NO_UPDATE_CHECK=1` turns it off.
 Releases are tags: bump `version`, tag `vX.Y.Z`, push the tag.
@@ -174,7 +175,8 @@ PINPOINT_DETACHED=1 PINPOINT_ROLE=http nohup bun run pinpoint serve > .docs/pinp
     "effort": "",               // preselects the effort pill: low | medium | high | xhigh | max ("" = whatever claude does)
     "models": []                // replaces the offered list: ["opus", { "id": "fable", "label": "Fable", "note": "most capable" }]
   },
-  "updateCheck": true           // optional; false stops looking at the package repo's tags for a newer pinpoint
+  "updateCheck": true,          // optional; false stops looking at the package repo's tags for a newer pinpoint
+  "skill": true                 // optional; false stops the server rewriting .claude/skills/pinpoint/SKILL.md from the installed package
 }
 ```
 

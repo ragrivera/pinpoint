@@ -44,7 +44,13 @@ progress, turn results) and follow-ups typed there go to the same worker (`POST
 /api/chat/:id`). The worker's stdin stays open, so a follow-up costs no cold start; after
 `worker.idleMinutes` (30) it is asked for a closing `recap:` line and then exits; the next message
 resumes the same Claude session
-(`--resume <uuid>`). *stop* in the drawer ends the process early; *Continue in a terminal* (the
+(`--resume <uuid>`). *stop* in the drawer cancels the turn in flight at once (a stream-json interrupt, running
+tool included) and ends the process: the button spins and the header reads `stopping…` until it has gone, the
+transcript notes `stopped`, and a second click while it is stopping kills the process outright. The pin chip on a
+message (`📌 2 pins · #3–#4`) opens to show what each pin held: its note, fix, the element or area it was placed on,
+the text there, source, box and the page it was sent from. An answer given on the question cards stays on the card
+(picks lit, typed text in place) with a one-line `✓ answered` under it instead of the questions echoed back; the
+worker still receives the full `question → answer` text. *Continue in a terminal* (the
 `>_` button, `POST /api/chat/:id/handoff`) ends it too and copies `cd <root> && claude --resume <session>`
 to the clipboard (a handoff card in the transcript confirms it), so the same Claude session
 carries on in a terminal. A `pinpoint X.Y.Z · update` pill floating over the transcript means the package repo
@@ -178,7 +184,8 @@ from a clone: `bun <clone>/bin/pinpoint.ts install`.) What it does, idempotently
   array. Skips configs already wired; refuses (and prints the manual snippet) when a config
   has zero or several `plugins: [` arrays rather than guess.
 - Writes the project-scope MCP server into `<root>/.mcp.json` (`bun run pinpoint serve`),
-  copies this skill to `<root>/.claude/skills/pinpoint/SKILL.md`, adds `.docs/pinpoint/` to
+  copies this skill to `<root>/.claude/skills/pinpoint/SKILL.md` (refreshed whenever the packaged skill
+  differs — on install, when the pinpoint server starts, and after an update from the drawer), adds `.docs/pinpoint/` to
   `.gitignore`, and creates the feedback dir. Commit those three files: the team gets the
   same setup on clone.
 - Merges a phoenix `extra_services` override when that skill is installed, so `/phoenix`

@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Features
+- ✨ Stop stops now. The drawer's Stop sends Claude's stream-json interrupt before closing stdin, so the turn in
+  flight (a long tool call included) is cancelled at once instead of running to its end; the process is killed 3s
+  later if it is still there, and a second click while it is stopping kills it outright. The server's own stops
+  (idle timeout, model or effort change, restart, handoff) still let the turn finish (server)
+- ✨ Stop shows it heard you: the button turns into a spinning ring (steady with reduced motion), the header reads
+  `stopping…` until the worker has exited, the transcript notes `stopped`, and the interrupted turn reads
+  `turn stopped` rather than `turn failed`. A failed request puts the button back and says why (overlay, server)
+- ✨ The pin chip on a message opens: `📌 2 pins · #3–#4` is a toggle that lists each pin's note, fix, the element
+  or area it was placed on, the text there, source, box, app state and the page it was sent from. User and batch
+  events carry the pins (`rows`); older transcripts get them filled in from the saved batch on replay (overlay, server)
+- ✨ Answers stay on the question card: a reply sent from the cards is tagged `answers: [{ q, a }]`, and the drawer
+  shows a one-line `✓ answered` under the answered card instead of echoing every question back. The worker still
+  gets the full text; an old transcript, or an answer whose card is gone, still reads as a message (overlay, server)
+- ✨ The project skill keeps up: `pinpoint install`, the owner's start and an update from the drawer rewrite
+  `.claude/skills/pinpoint/SKILL.md` when the packaged skill differs (a symlinked copy and `~/.claude` are left
+  alone; `"skill": false` opts the server out) (install, server)
+
+### Fixes
+- 🐛 A host page's global form-control rule no longer resizes the overlay's inputs: every textarea, input and select
+  the overlay creates re-asserts its own font, padding and height behind a `:not(#_pp)` id booster, so a rule like
+  `body:not(:has(.x)) :is(input, select, textarea) { min-height: 44px; font-size: 16px }` cannot out-rank it (overlay)
+
+### Tests
+- ✅ Stop: the interrupt reaches stdin before EOF and the worker exits as stopped (not failed) with no idle flash,
+  a second Stop kills a process that ignores it, one Stop kills it after ~3s, a model change sends no interrupt
+- ✅ Pin rows on batch and user events, the replay fill-in (only after the last `/clear`), card answers tagged
+  with junk dropped, and the skill refresh: missing, differs, same, dry run, symlink, home dir, install, start, update
+- ✅ Every form control the overlay creates has a guard rule that re-asserts its own box and font
+
 ## [0.8.1] - 2026-09-24
 
 ### Features
