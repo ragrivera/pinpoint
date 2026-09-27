@@ -6,7 +6,7 @@
 //   pinpoint skill --force    → overwrite an existing copy
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, unlinkSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
 import { findProject } from './config.js';
 
 export const SKILL_SRC_DIR = join(import.meta.dir, '..', 'skill');
@@ -45,5 +45,25 @@ export function run(argv: string[]): number {
   return 0;
 }
 function isSymlink(p: string): boolean { try { return lstatSync(p).isSymbolicLink(); } catch { return false; } }
+
+export type SkillRefresh = 'written' | 'updated' | 'current' | 'linked' | 'none' | 'skipped';
+/** Keep a repo's project copy (<root>/.claude/skills/pinpoint/SKILL.md) in step with the skill a package ships. It was
+ *  written once and never again, so an upgraded repo kept an old skill (OrgSpace's lacked the "Recommended — " rule, and
+ *  workers never marked an option). `pinpoint install`, the HTTP owner's start and the drawer's update all call this.
+ *  Returns what it did (or, with `dry`, would do): 'written' (no copy yet), 'updated' (it differed), 'current';
+ *  'linked' when the dir is a symlink (`pinpoint skill --link`: it already follows its target), 'none' when there is no
+ *  packaged skill to copy, 'skipped' when the root is the home dir — ~/.claude/skills/pinpoint is a user-level copy
+ *  other repos use, and `pinpoint skill --user` is the only thing that writes it. */
+export function refreshProjectSkill(root: string, src = SKILL_SRC, opts: { dry?: boolean } = {}): SkillRefresh {
+  if (!existsSync(src)) return 'none';
+  if (resolve(root) === resolve(process.env.HOME || homedir())) return 'skipped';
+  const dir = join(root, '.claude', 'skills', 'pinpoint');
+  if (isSymlink(dir)) return 'linked';
+  const file = join(dir, 'SKILL.md'), body = readFileSync(src, 'utf8');
+  const had = existsSync(file);
+  if (had && readFileSync(file, 'utf8') === body) return 'current';
+  if (!opts.dry) { mkdirSync(dir, { recursive: true }); writeFileSync(file, body); }
+  return had ? 'updated' : 'written';
+}
 
 if (import.meta.main) process.exit(run(process.argv.slice(2)));

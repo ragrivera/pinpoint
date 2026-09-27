@@ -593,6 +593,8 @@ describe('update worker + self-restart', () => {
         'done',
       ].join('\n') + '\n',
       'node_modules/pinpoint-live/package.json': JSON.stringify({ name: 'pinpoint-live', version: '0.0.1' }), // older than what runs: no restart after the turn
+      'node_modules/pinpoint-live/skill/SKILL.md': '# the skill 0.0.1 ships\n',
+      '.claude/skills/pinpoint/SKILL.md': '# a stale project copy\n', // the owner brings it in step with the installed package on start
     });
     writeFileSync(join(project.root, '.pinpoint.json'), JSON.stringify({ port, name: 'selfupd', dispatch: 'worker', claudeBin: join(project.root, 'fake-claude.sh'), apps: [{ dir: '.', origin: ORIGIN }] }));
     Bun.spawnSync(['chmod', '+x', join(project.root, 'fake-claude.sh')]);
@@ -605,6 +607,11 @@ describe('update worker + self-restart', () => {
     await waitFor(async () => (await health()).update?.latest === '77.0.0', 10000);
   }, 30000);
   afterAll(() => { try { owner.kill(); } catch {} project.rm(); tags.rm(); });
+
+  const skillCopy = () => readFileSync(join(project.root, '.claude', 'skills', 'pinpoint', 'SKILL.md'), 'utf8');
+  test("the HTTP owner refreshes the project's skill copy from the installed package on start", () => {
+    expect(skillCopy()).toBe('# the skill 0.0.1 ships\n');
+  });
 
   test('health names the running version and pid, with nothing updating', async () => {
     const h = await health();
@@ -632,6 +639,7 @@ describe('update worker + self-restart', () => {
     expect(raw).toContain('CHANGELOG.md');
     expect(raw).toContain('```recap pinpoint ' + running + ' \u2192 77.0.0');
     expect(raw).toContain('restarts itself');
+    expect(raw).toContain('.claude/skills/pinpoint/SKILL.md'); // told the server refreshes the skill, so the recap can say so
     // the transcript opened on the update, and the batch file is pre-claimed like any worker's
     expect(transcript(j.id)[0]).toMatchObject({ t: 'batch', update: { from: running, to: '77.0.0' } });
     expect(readdirSync(join(project.root, '.docs', 'pinpoint', 'feedback')).some((n) => n.startsWith(j.id + '.claimed-'))).toBe(true);
@@ -645,6 +653,7 @@ describe('update worker + self-restart', () => {
 
   test('a turn that leaves a newer install behind restarts the server onto it; the old process relays and the new one lists the conversation', async () => {
     writeFileSync(pkgFile(), JSON.stringify({ name: 'pinpoint-live', version: '77.0.0' }));
+    writeFileSync(join(project.root, 'node_modules', 'pinpoint-live', 'skill', 'SKILL.md'), '# the skill 77.0.0 ships\n'); // what the update's bun add brought
     const before = await health();
     const r = await post('/api/update', { page: `${ORIGIN}/home`, title: 'Home' });
     expect(r.status).toBe(200);
@@ -658,6 +667,9 @@ describe('update worker + self-restart', () => {
     // the hand-over is in the transcript, and the new server revived the conversation from disk
     await waitFor(async () => transcript(id).some((e: any) => e.t === 'status' && e.restarting === true), 5000);
     expect(transcript(id).find((e: any) => e.restarting)).toMatchObject({ from: running, to: '77.0.0' });
+    // the new package's skill replaced the project copy, in code (not left to the worker), and the transcript says so
+    expect(skillCopy()).toBe('# the skill 77.0.0 ships\n');
+    expect(transcript(id).find((e: any) => e.t === 'status' && e.skill)).toMatchObject({ note: true, skill: 'updated' });
     await waitFor(async () => (await row(id))?.state === 'exited', 10000);
     expect(await row(id)).toMatchObject({ kind: 'update', update: { from: running, to: '77.0.0' } });
     expect(owner.exitCode).toBe(null); // the old process is still there: the relay

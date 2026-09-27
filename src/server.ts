@@ -57,17 +57,18 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renam
 import { homedir } from 'os';
 import { basename, dirname, extname, join, resolve, sep } from 'path';
 import { findProject as findProjectFile } from './config.js';
+import { refreshProjectSkill } from './skill.ts';
 import pkg from '../package.json';
 
 type ModelOpt = { id: string; label: string; note?: string };
 type WorkerCfg = { artifacts?: boolean; idleMinutes?: number; mcp?: 'pinpoint' | 'all'; args?: string[]; model?: string; models?: Array<string | Partial<ModelOpt>>; effort?: string; recapOnIdle?: boolean };
-type Project = { root: string; port?: number; name?: string; file?: string; dispatch?: 'worker' | 'session'; claudeBin?: string; worker?: WorkerCfg; origins: string[]; updateCheck?: boolean };
+type Project = { root: string; port?: number; name?: string; file?: string; dispatch?: 'worker' | 'session'; claudeBin?: string; worker?: WorkerCfg; origins: string[]; updateCheck?: boolean; skill?: boolean };
 function findProject(from: string): Project {
   const { root, file, config: j } = findProjectFile(from);
   if (!file) return { root: resolve(from), origins: [] };
   if (!j) return { root, file, origins: [] }; // unreadable file: still marks the root
   const origins = Array.isArray(j.apps) ? j.apps.map((a: any) => String(a?.origin || '')).filter(Boolean).map((o: string) => { try { return new URL(o).origin; } catch { return ''; } }).filter(Boolean) : [];
-  return { root, port: Number(j.port) || undefined, name: typeof j.name === 'string' && j.name ? j.name : undefined, file, dispatch: j.dispatch === 'session' || j.dispatch === 'worker' ? j.dispatch : undefined, claudeBin: typeof j.claudeBin === 'string' ? j.claudeBin : undefined, worker: j.worker && typeof j.worker === 'object' ? j.worker : undefined, origins, updateCheck: j.updateCheck !== false };
+  return { root, port: Number(j.port) || undefined, name: typeof j.name === 'string' && j.name ? j.name : undefined, file, dispatch: j.dispatch === 'session' || j.dispatch === 'worker' ? j.dispatch : undefined, claudeBin: typeof j.claudeBin === 'string' ? j.claudeBin : undefined, worker: j.worker && typeof j.worker === 'object' ? j.worker : undefined, origins, updateCheck: j.updateCheck !== false, skill: j.skill !== false };
 }
 const PROJECT = findProject(process.env.PINPOINT_ROOT || process.cwd());
 const ROOT = PROJECT.root;
@@ -847,6 +848,17 @@ function sse(w: Worker, req: Request, headers: Record<string, string>) {
 const PKG_DIR = join(ROOT, 'node_modules', pkg.name); // the project's install of this package: what bun add updates and what a restart runs
 const PKG_BIN = join(PKG_DIR, 'bin', 'pinpoint.ts');
 const CHANGELOG = join(PKG_DIR, 'CHANGELOG.md');
+const PKG_SKILL = join(PKG_DIR, 'skill', 'SKILL.md');
+// The project's copy of the /pinpoint skill follows the package the project has installed: refreshed in code when the
+// owner starts and right after an update turn, so a new version's skill rules can never be skipped. It is left
+// uncommitted, like the package.json + lockfile the update rewrote. "skill": false in .pinpoint.json opts out.
+function syncSkill(why: string): ReturnType<typeof refreshProjectSkill> {
+  if (PROJECT.skill === false) return 'skipped';
+  let r: ReturnType<typeof refreshProjectSkill> = 'none';
+  try { r = refreshProjectSkill(ROOT, PKG_SKILL); } catch (e: any) { log(`skill refresh failed (${why}): ${e?.message || e}`); return 'none'; }
+  if (r === 'written' || r === 'updated') log(`skill: ${r} .claude/skills/pinpoint/SKILL.md from ${pkg.name} ${installedVersion() ?? '?'} (${why})`);
+  return r;
+}
 const installedVersion = (): string | null => { try { return String(JSON.parse(readFileSync(join(PKG_DIR, 'package.json'), 'utf8')).version || '') || null; } catch { return null; } };
 let updatingId: string | null = null; // the update conversation this server started, if any
 let restarting = false;
@@ -868,7 +880,8 @@ function updatePrompt(u: UpdateInfo): string {
     "- what changed, in the reviewer's terms",
     '- ...',
     '```',
-    `5. Do not restart, kill or reinstall anything else: the pinpoint server restarts itself onto ${u.latest} the moment this turn ends, and the drawer reconnects on its own. Never open a reply with a timestamp line.`,
+    `5. The server refreshes this repo's ${join(ROOT, '.claude', 'skills', 'pinpoint', 'SKILL.md')} from ${PKG_SKILL} itself once this turn ends — never edit either. If the two differ after step 1, end the recap with a line saying the project's /pinpoint skill is refreshed to match the new version.`,
+    `6. Do not restart, kill or reinstall anything else: the pinpoint server restarts itself onto ${u.latest} the moment this turn ends, and the drawer reconnects on its own. Never open a reply with a timestamp line.`,
   ].join('\n');
 }
 function startUpdate(page: string, title: string, modelRaw?: unknown, effortRaw?: unknown): { id: string; existing: boolean } {
@@ -900,6 +913,8 @@ function startUpdate(page: string, title: string, modelRaw?: unknown, effortRaw?
 }
 /** The update worker's turn is over: if the project now holds a newer package than this process runs, restart onto it. */
 function afterUpdateTurn(w: Worker) {
+  const sk = syncSkill('update');
+  if (sk === 'written' || sk === 'updated') w.emit({ t: 'status', state: w.rec.state, note: true, skill: sk, text: `project skill .claude/skills/pinpoint/SKILL.md ${sk === 'written' ? 'written' : 'refreshed'} from ${pkg.name} ${installedVersion() ?? ''} \u2014 leave it uncommitted with package.json and the lockfile` });
   const have = installedVersion();
   if (!have || semverCmp(have, pkg.version) <= 0) { log(`update ${w.rec.batchId}: installed ${have ?? 'nothing'}, running ${pkg.version} — staying`); return; }
   w.emit({ t: 'status', state: w.rec.state, restarting: true, from: pkg.version, to: have });
@@ -1100,6 +1115,7 @@ if (httpOwner) {
   log(`http://127.0.0.1:${PORT}  pins → ${FEEDBACK_DIR}  dispatch=${DISPATCH}`);
   writeWorkerMcpCfg();
   loadWorkers();
+  syncSkill('start');
   maybeCheckUpdate();
   updTimer = setInterval(maybeCheckUpdate, UPDATE_EVERY_MS); updTimer.unref(); // and for a server left running with no workers
   if (DISPATCH === 'worker' && !existsSync(CLAUDE_BIN)) log(`WARNING: claude binary not found at ${CLAUDE_BIN}; worker dispatch will fail (set claudeBin in .pinpoint.json)`);
