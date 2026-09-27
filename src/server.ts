@@ -57,17 +57,18 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renam
 import { homedir } from 'os';
 import { basename, dirname, extname, join, resolve, sep } from 'path';
 import { findProject as findProjectFile } from './config.js';
+import { refreshProjectSkill } from './skill.ts';
 import pkg from '../package.json';
 
 type ModelOpt = { id: string; label: string; note?: string };
 type WorkerCfg = { artifacts?: boolean; idleMinutes?: number; mcp?: 'pinpoint' | 'all'; args?: string[]; model?: string; models?: Array<string | Partial<ModelOpt>>; effort?: string; recapOnIdle?: boolean };
-type Project = { root: string; port?: number; name?: string; file?: string; dispatch?: 'worker' | 'session'; claudeBin?: string; worker?: WorkerCfg; origins: string[]; updateCheck?: boolean };
+type Project = { root: string; port?: number; name?: string; file?: string; dispatch?: 'worker' | 'session'; claudeBin?: string; worker?: WorkerCfg; origins: string[]; updateCheck?: boolean; skill?: boolean };
 function findProject(from: string): Project {
   const { root, file, config: j } = findProjectFile(from);
   if (!file) return { root: resolve(from), origins: [] };
   if (!j) return { root, file, origins: [] }; // unreadable file: still marks the root
   const origins = Array.isArray(j.apps) ? j.apps.map((a: any) => String(a?.origin || '')).filter(Boolean).map((o: string) => { try { return new URL(o).origin; } catch { return ''; } }).filter(Boolean) : [];
-  return { root, port: Number(j.port) || undefined, name: typeof j.name === 'string' && j.name ? j.name : undefined, file, dispatch: j.dispatch === 'session' || j.dispatch === 'worker' ? j.dispatch : undefined, claudeBin: typeof j.claudeBin === 'string' ? j.claudeBin : undefined, worker: j.worker && typeof j.worker === 'object' ? j.worker : undefined, origins, updateCheck: j.updateCheck !== false };
+  return { root, port: Number(j.port) || undefined, name: typeof j.name === 'string' && j.name ? j.name : undefined, file, dispatch: j.dispatch === 'session' || j.dispatch === 'worker' ? j.dispatch : undefined, claudeBin: typeof j.claudeBin === 'string' ? j.claudeBin : undefined, worker: j.worker && typeof j.worker === 'object' ? j.worker : undefined, origins, updateCheck: j.updateCheck !== false, skill: j.skill !== false };
 }
 const PROJECT = findProject(process.env.PINPOINT_ROOT || process.cwd());
 const ROOT = PROJECT.root;
@@ -336,7 +337,7 @@ function receive(input: Omit<Batch, 'id' | 'receivedAt'> & { images?: unknown })
     writeFileSync(join(FEEDBACK_DIR, `${id}.claimed-${workerId}.json`), JSON.stringify(b, null, 2));
     const w = new Worker({ batchId: id, workerId, sessionUuid: crypto.randomUUID(), page: b.page, title: b.title, state: 'starting', started: false, startedAt: ts.toISOString(), lastAt: ts.toISOString(), turns: 0, costUsd: 0, model, effort });
     workers.set(id, w);
-    w.emit({ t: 'batch', pins: b.pins.length, general: b.general || '', page: b.page, title: b.title, images: publicRefs(refs) });
+    w.emit({ t: 'batch', pins: b.pins.length, ...(b.pins.length ? { rows: pinCards(pinRows(b.pins)) } : {}), general: b.general || '', page: b.page, title: b.title, images: publicRefs(refs) });
     w.sendRaw(withImages(batchPrompt(b, w.rec.sessionUuid), refs, blocks));
     log('pins received', id, `${b.pins.length} pin(s)`, `→ worker ${workerId}`);
     if (flutterPage(b.page)) flutterBus.emit({ t: 'sent', id, pins: b.pins.length }); // `pinpoint flutter` polls the batch and hot-reloads on completion
@@ -483,6 +484,9 @@ function toolSummary(name: string, input: any): string {
 }
 const flat = (c: unknown): string => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((x: any) => (x && x.type === 'text' ? x.text : '')).join('\n') : '');
 const pinRows = (pins: unknown[], offset = 0) => (pins as any[]).map((p, i) => ({ n: offset + i + 1, type: p?.type || '', comment: p?.comment || '', fix: p?.fix || '', element: p?.element ? { tag: p.element.tag, path: p.element.path, text: p.element.text } : undefined, near: p?.near, rect: p?.rect, scrollY: p?.scrollY, source: p?.source && p.source.file ? { file: String(p.source.file), line: Number(p.source.line) || 0, column: Number(p.source.column) || 0 } : undefined, widget: p?.widget ? String(p.widget) : undefined, state: p?.state ?? undefined }));
+// What a pin chip in the transcript opens to: the rows the worker was handed, with the app's state object flattened to a
+// capped string (it is whatever window.__designReviewState returns, and every transcript line is replayed on each open).
+const pinCards = (rows: ReturnType<typeof pinRows>) => rows.map(({ state, ...r }) => ({ ...r, ...(state != null ? { state: JSON.stringify(state).slice(0, 600) } : {}) }));
 // ROOT as one shell word — bare when safe, single-quoted otherwise. The brief's resume command and handoff() share it.
 const ROOT_SH = /^[\w./-]+$/.test(ROOT) ? ROOT : `'${ROOT.replace(/'/g, "'\\''")}'`;
 function batchPrompt(b: Batch, session = ''): string {
@@ -594,6 +598,11 @@ const withImages = (text: string, refs: ImgRef[], blocks: Array<Record<string, u
   ].filter(Boolean);
   return [{ type: 'text', text: `${text}\n\n(${notes.join(' ')})` }, ...blocks];
 };
+// An answer from the drawer's question cards arrives with its question/answer pairs beside the text. The text goes to the
+// worker as ever; the pairs tag the transcript line, so the drawer lets the answered card stand as the record instead of
+// echoing every question back as a message. Anything that is not a { q, a } pair of strings is dropped.
+type QA = { q: string; a: string };
+const cardAnswers = (raw: unknown): QA[] => (Array.isArray(raw) ? raw : []).filter((x: any) => x && typeof x.q === 'string' && typeof x.a === 'string').slice(0, 12).map((x: any) => ({ q: x.q.slice(0, 500), a: x.a.slice(0, 2000) }));
 const publicRefs = (refs: ImgRef[]) => refs.map(({ url, name, type, bytes, img }) => ({ url, name, type, bytes, img: img !== false && Boolean(IMG_EXT[type]) }));
 class Worker {
   proc: ReturnType<typeof Bun.spawn> | null = null;
@@ -603,6 +612,7 @@ class Worker {
   private recapAsked = false; // one final-recap prompt per idle stretch, never a loop
   private killTimer: ReturnType<typeof setTimeout> | null = null;
   private stopping = false; // stdin already closed: the exit is on its way, do not ask twice
+  private userStop = false; // the reviewer's Stop ended this process: its exit reads as stopped, not as a failure
   private spawnedModel = ''; // the --model this process actually started with
   private spawnedEffort = ''; // ditto --effort: both only change on a restart
   private inflight = 0; // messages written but not yet answered — never end a process holding one
@@ -621,11 +631,12 @@ class Worker {
   }
   setState(state: WState, extra?: Record<string, unknown>) { this.rec.state = state; this.saveRec(); this.emit({ t: 'status', state, ...(extra || {}) }); }
   /** Reviewer message (+ screenshots, + pins already appended to this batch): echoed to the transcript, then fed to the worker (spawning / resuming it if needed). */
-  send(text: string, images?: unknown, pins?: PinAppend) {
+  send(text: string, images?: unknown, pins?: PinAppend, page?: string, answers?: QA[]) {
     this.recapAsked = false; // a real message: this conversation earns another recap when it next goes quiet
     const { refs, blocks } = saveFiles(this.rec.batchId, images);
     const withPins = Boolean(pins && pins.count > 0);
-    this.emit({ t: 'user', text, images: publicRefs(refs), ...(withPins ? { pins: { first: pins!.first, count: pins!.count } } : {}) });
+    // The chip keeps what the pins held (and the page they were sent from), so the drawer can open it without the batch file.
+    this.emit({ t: 'user', text, images: publicRefs(refs), ...(answers && answers.length ? { answers } : {}), ...(withPins ? { pins: { first: pins!.first, count: pins!.count, ...(page ? { page } : {}), rows: pinCards(pins!.rows as ReturnType<typeof pinRows>) } } : {}) });
     this.sendRaw(withImages(withPins ? followUpPrompt(text, this.rec.batchId, pins!) : text, refs, blocks));
   }
   sendRaw(content: UserContent) {
@@ -662,7 +673,7 @@ class Worker {
         stdin: 'pipe', stdout: 'pipe', stderr: 'pipe',
       });
     } catch (e) { this.proc = null; this.setState('error', { text: `spawn failed: ${String((e as any)?.message || e)}` }); return; }
-    this.rec.started = true; this.announced = false; this.stopping = false; this.inflight = 0;
+    this.rec.started = true; this.announced = false; this.stopping = false; this.userStop = false; this.inflight = 0;
     this.setState('starting', { resume, pid: this.proc.pid });
     log(`worker ${this.rec.workerId} ${resume ? 'resumed' : 'started'} pid ${this.proc.pid} for ${this.rec.batchId}`);
     void this.pump(this.proc.stdout as ReadableStream<Uint8Array>, (l) => this.onLine(l));
@@ -672,8 +683,8 @@ class Worker {
       if (this.proc !== p) return;
       this.proc = null; this.clearIdle(); if (this.killTimer) { clearTimeout(this.killTimer); this.killTimer = null; }
       this.rec.exitCode = code;
-      const clean = code === 0 || this.rec.state === 'idle';
-      this.setState(clean ? 'exited' : 'error', { code });
+      const clean = code === 0 || this.rec.state === 'idle' || this.userStop; // an interrupted claude exits 1, and a killed one on a signal
+      this.setState(clean ? 'exited' : 'error', { code, ...(this.userStop ? { stopped: true } : {}) });
       log(`worker ${this.rec.workerId} exited ${code}`);
       if (this.queue.length) this.start(true); // a message arrived while it was shutting down
     });
@@ -710,12 +721,13 @@ class Worker {
           else if (c.type === 'tool_use') this.emit({ t: 'tool', name: c.name, summary: toolSummary(String(c.name), c.input) });
         }
         break;
-      case 'user': // tool results echo back as user turns; surface only failures
-        for (const c of Array.isArray(m.message?.content) ? m.message.content : []) if (c.type === 'tool_result' && c.is_error) this.emit({ t: 'tool_error', text: flat(c.content).slice(0, 300) });
+      case 'user': // tool results echo back as user turns; surface only failures (not the call a Stop cancelled)
+        for (const c of Array.isArray(m.message?.content) ? m.message.content : []) if (c.type === 'tool_result' && c.is_error && !this.userStop) this.emit({ t: 'tool_error', text: flat(c.content).slice(0, 300) });
         break;
       case 'result':
         this.rec.turns += 1; this.rec.costUsd += Number(m.total_cost_usd || 0); this.inflight = Math.max(0, this.inflight - 1);
-        this.emit({ t: 'result', ok: !m.is_error, subtype: m.subtype, ms: m.duration_ms, cost: m.total_cost_usd, turns: m.num_turns, text: m.is_error ? String(m.result || m.error || 'error') : '' });
+        this.emit({ t: 'result', ok: !m.is_error, subtype: m.subtype, ms: m.duration_ms, cost: m.total_cost_usd, turns: m.num_turns, text: m.is_error ? String(m.result || m.error || 'error') : '', ...(this.userStop ? { stopped: true } : {}) });
+        if (this.userStop) break; // the turn a Stop cancelled: the exit follows, so no "your turn" in between and nothing to arm
         this.setState('idle');
         if (this.recapAsked) this.stop('idle timeout'); else this.armIdle(); // the recap was the last turn
         this.applyPicks(); // picked mid-turn: end the process now so the next message starts on it
@@ -764,19 +776,34 @@ class Worker {
     if (!this.proc || !this.stalePicks() || this.inflight) return;
     this.stop(this.spawnedModel === (this.rec.model || '') ? 'effort change' : 'model change');
   }
-  /** Close stdin so Claude ends the conversation; a later message resumes it by session id. */
-  stop(reason: string) {
+  /** Close stdin so Claude ends the conversation; a later message resumes it by session id. Closing stdin lets the turn
+   *  in flight run to its end, tool calls and all, which suits the server's own stops: the idle timeout (never cut off the
+   *  recap), a model or effort change, a restart, a handoff. The reviewer's Stop (`user`) cannot wait on that: it first
+   *  writes the stream-json interrupt control request (what the Agent SDK's interrupt() sends; claude answers with a
+   *  control_response and ends the turn with an error_during_execution result, the running tool cancelled), and the
+   *  kill behind it drops from 15s to 3s. A second Stop while one is under way kills outright.
+   *  Returns what happened: 'none' (no process), 'stopping', or 'killed'. */
+  stop(reason: string, user = false): 'none' | 'stopping' | 'killed' {
     this.clearIdle();
-    if (!this.proc || this.stopping) return;
-    this.stopping = true;
-    this.emit({ t: 'status', state: this.rec.state, stopping: reason });
     const p = this.proc;
+    if (!p) return 'none';
+    if (this.stopping) {
+      if (!user) return 'stopping';
+      this.userStop = true;
+      this.emit({ t: 'status', state: this.rec.state, stopping: 'killed from the overlay', user: true, kill: true });
+      try { p.kill(); } catch {}
+      return 'killed';
+    }
+    this.stopping = true; this.userStop = user;
+    this.emit({ t: 'status', state: this.rec.state, stopping: reason, ...(user ? { user: true } : {}) });
+    if (user) { try { (p.stdin as any).write(JSON.stringify({ type: 'control_request', request_id: `stop-${Date.now().toString(36)}`, request: { subtype: 'interrupt' } }) + '\n'); (p.stdin as any).flush(); } catch {} }
     try { (p.stdin as any).end(); } catch {}
-    this.killTimer = setTimeout(() => { if (this.proc === p) { try { p.kill(); } catch {} } }, 15_000);
+    this.killTimer = setTimeout(() => { if (this.proc === p) { try { p.kill(); } catch {} } }, user ? 3_000 : 15_000);
+    return 'stopping';
   }
   /** Close the conversation for good: end the process (if any), drop it from /api/chat and park the record so a restart does not bring it back. */
   close(reason: string) {
-    this.stop(reason);
+    this.stop(reason, true); // the drawer asks "stop?" before closing a running worker: the reviewer meant it, so interrupt
     const live = this.recFile; this.closed = true;
     try { if (existsSync(live)) renameSync(live, this.recFile); else this.saveRec(); } catch {}
     workers.delete(this.rec.batchId);
@@ -814,6 +841,22 @@ function listChats() {
     return { id: w.rec.batchId, page: w.rec.page, title: w.rec.title, state: w.rec.state, session: w.rec.sessionUuid, model: w.rec.model || '', effort: w.rec.effort || '', startedAt: w.rec.startedAt, lastAt: w.rec.lastAt, turns: w.rec.turns, costUsd: Math.round(w.rec.costUsd * 1000) / 1000, pins, general, kind: w.rec.kind || '', update: w.rec.update || null };
   });
 }
+// Transcripts written before chips carried their pins hold only { first, count }: fill the rows in from the saved batch
+// on the way out (the file is not rewritten), so an old chip opens too. Only after the last /clear, which emptied the
+// batch and numbered the next pins from #1 again — before it, the numbers point at pins the batch no longer has.
+function withPinRows(id: string, evs: ChatEvent[]): ChatEvent[] {
+  let reset = -1; evs.forEach((e, i) => { if (e.t === 'status' && e.reset) reset = i; });
+  let pins: unknown[] | null = null;
+  const saved = () => { if (pins) return pins; try { const f = findSaved(id); pins = f ? (JSON.parse(readFileSync(f, 'utf8')) as Batch).pins : []; } catch { pins = []; } return pins; };
+  const rows = (first: number, count: number) => { const l = saved().slice(first - 1, first - 1 + count); return l.length === count ? pinCards(pinRows(l, first - 1)) : null; };
+  return evs.map((e, i) => {
+    if (i < reset) return e;
+    const p = e.pins as any;
+    if (e.t === 'user' && p && typeof p === 'object' && !p.rows && p.count > 0) { const r = rows(Number(p.first) || 1, Number(p.count)); return r ? { ...e, pins: { ...p, rows: r } } : e; }
+    if (e.t === 'batch' && typeof p === 'number' && p > 0 && !e.rows) { const r = rows(1, p); return r ? { ...e, rows: r } : e; }
+    return e;
+  });
+}
 function sse(w: Worker, req: Request, headers: Record<string, string>) {
   let sub: ((e: ChatEvent) => void) | null = null; let hb: ReturnType<typeof setInterval> | null = null;
   const stream = new ReadableStream<Uint8Array>({
@@ -821,7 +864,7 @@ function sse(w: Worker, req: Request, headers: Record<string, string>) {
       const enc = new TextEncoder();
       const push = (e: unknown) => { try { c.enqueue(enc.encode(`data: ${JSON.stringify(e)}\n\n`)); } catch {} };
       c.enqueue(enc.encode('retry: 2000\n\n'));
-      for (const e of w.history()) push(e);
+      for (const e of withPinRows(w.rec.batchId, w.history())) push(e);
       push({ t: 'sync', at: new Date().toISOString(), state: w.rec.state });
       sub = push; w.subs.add(sub);
       hb = setInterval(() => { try { c.enqueue(enc.encode(': hb\n\n')); } catch {} }, 20_000);
@@ -847,6 +890,17 @@ function sse(w: Worker, req: Request, headers: Record<string, string>) {
 const PKG_DIR = join(ROOT, 'node_modules', pkg.name); // the project's install of this package: what bun add updates and what a restart runs
 const PKG_BIN = join(PKG_DIR, 'bin', 'pinpoint.ts');
 const CHANGELOG = join(PKG_DIR, 'CHANGELOG.md');
+const PKG_SKILL = join(PKG_DIR, 'skill', 'SKILL.md');
+// The project's copy of the /pinpoint skill follows the package the project has installed: refreshed in code when the
+// owner starts and right after an update turn, so a new version's skill rules can never be skipped. It is left
+// uncommitted, like the package.json + lockfile the update rewrote. "skill": false in .pinpoint.json opts out.
+function syncSkill(why: string): ReturnType<typeof refreshProjectSkill> {
+  if (PROJECT.skill === false) return 'skipped';
+  let r: ReturnType<typeof refreshProjectSkill> = 'none';
+  try { r = refreshProjectSkill(ROOT, PKG_SKILL); } catch (e: any) { log(`skill refresh failed (${why}): ${e?.message || e}`); return 'none'; }
+  if (r === 'written' || r === 'updated') log(`skill: ${r} .claude/skills/pinpoint/SKILL.md from ${pkg.name} ${installedVersion() ?? '?'} (${why})`);
+  return r;
+}
 const installedVersion = (): string | null => { try { return String(JSON.parse(readFileSync(join(PKG_DIR, 'package.json'), 'utf8')).version || '') || null; } catch { return null; } };
 let updatingId: string | null = null; // the update conversation this server started, if any
 let restarting = false;
@@ -868,7 +922,8 @@ function updatePrompt(u: UpdateInfo): string {
     "- what changed, in the reviewer's terms",
     '- ...',
     '```',
-    `5. Do not restart, kill or reinstall anything else: the pinpoint server restarts itself onto ${u.latest} the moment this turn ends, and the drawer reconnects on its own. Never open a reply with a timestamp line.`,
+    `5. The server refreshes this repo's ${join(ROOT, '.claude', 'skills', 'pinpoint', 'SKILL.md')} from ${PKG_SKILL} itself once this turn ends — never edit either. If the two differ after step 1, end the recap with a line saying the project's /pinpoint skill is refreshed to match the new version.`,
+    `6. Do not restart, kill or reinstall anything else: the pinpoint server restarts itself onto ${u.latest} the moment this turn ends, and the drawer reconnects on its own. Never open a reply with a timestamp line.`,
   ].join('\n');
 }
 function startUpdate(page: string, title: string, modelRaw?: unknown, effortRaw?: unknown): { id: string; existing: boolean } {
@@ -900,6 +955,8 @@ function startUpdate(page: string, title: string, modelRaw?: unknown, effortRaw?
 }
 /** The update worker's turn is over: if the project now holds a newer package than this process runs, restart onto it. */
 function afterUpdateTurn(w: Worker) {
+  const sk = syncSkill('update');
+  if (sk === 'written' || sk === 'updated') w.emit({ t: 'status', state: w.rec.state, note: true, skill: sk, text: `project skill .claude/skills/pinpoint/SKILL.md ${sk === 'written' ? 'written' : 'refreshed'} from ${pkg.name} ${installedVersion() ?? ''} \u2014 leave it uncommitted with package.json and the lockfile` });
   const have = installedVersion();
   if (!have || semverCmp(have, pkg.version) <= 0) { log(`update ${w.rec.batchId}: installed ${have ?? 'nothing'}, running ${pkg.version} — staying`); return; }
   w.emit({ t: 'status', state: w.rec.state, restarting: true, from: pkg.version, to: have });
@@ -1064,7 +1121,7 @@ try {
           return new Response(Bun.file(path), { headers: { ...CORS, 'Cache-Control': 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff', ...(asFile ? { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="${file}"` } : {}) } });
         }
         if (cm[2] === 'events' && req.method === 'GET') return sse(w, req, CORS);
-        if (cm[2] === 'stop' && req.method === 'POST') { w.stop('stopped from the overlay'); return Response.json({ ok: true }, { headers: CORS }); }
+        if (cm[2] === 'stop' && req.method === 'POST') return Response.json({ ok: true, stop: w.stop('stopped from the overlay', true) }, { headers: CORS });
         if (cm[2] === 'close' && req.method === 'POST') { w.close('closed from the overlay'); return Response.json({ ok: true }, { headers: CORS }); }
         if (cm[2] === 'handoff' && req.method === 'POST') return Response.json({ ok: true, ...w.handoff() }, { headers: CORS });
         if (cm[2] === 'model' && req.method === 'POST') {
@@ -1087,7 +1144,7 @@ try {
             if (typeof j?.model === 'string') w.setModel(j.model); // the pill moved while the message was being typed
             if (typeof j?.effort === 'string') w.setEffort(j.effort);
             const added = appendPins(id, j?.pins); // pins from the drawer join this batch before the worker hears about them
-            w.send((text || (added.count ? 'See the new pins.' : 'See the attached screenshot.')).slice(0, 20_000), j?.images, added);
+            w.send((text || (added.count ? 'See the new pins.' : 'See the attached screenshot.')).slice(0, 20_000), j?.images, added, typeof j?.page === 'string' ? j.page.slice(0, 500) : '', cardAnswers(j?.answers));
             return Response.json({ ok: true, state: w.rec.state, pins: added.count, total: added.total }, { headers: CORS });
           } catch (e: any) { const st = e instanceof PinError ? e.status : 500; log('chat refused', st, e?.message); return Response.json({ ok: false, error: String(e?.message || e), hint: e?.hint ?? null }, { status: st, headers: CORS }); }
         }
@@ -1100,6 +1157,7 @@ if (httpOwner) {
   log(`http://127.0.0.1:${PORT}  pins → ${FEEDBACK_DIR}  dispatch=${DISPATCH}`);
   writeWorkerMcpCfg();
   loadWorkers();
+  syncSkill('start');
   maybeCheckUpdate();
   updTimer = setInterval(maybeCheckUpdate, UPDATE_EVERY_MS); updTimer.unref(); // and for a server left running with no workers
   if (DISPATCH === 'worker' && !existsSync(CLAUDE_BIN)) log(`WARNING: claude binary not found at ${CLAUDE_BIN}; worker dispatch will fail (set claudeBin in .pinpoint.json)`);

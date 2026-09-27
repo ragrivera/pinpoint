@@ -276,7 +276,16 @@
   @media(prefers-reduced-motion:reduce){.dr-sn .t .pins i.working{animation:none}}
   .dr-sn .t .mn:hover{background:rgba(var(--dr-w),.08);color:var(--dr-fg)}
   .dr-sn .t.err{border-color:rgba(255,90,95,.45)}.dr-sn .t.ok .bar i{width:100%}
-  .dr-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483601;background:#1d2229;color:#fff;padding:10px 16px;border-radius:999px;font:600 13px system-ui,sans-serif;box-shadow:0 12px 30px rgba(0,0,0,.35)}`;
+  .dr-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483601;background:#1d2229;color:#fff;padding:10px 16px;border-radius:999px;font:600 13px system-ui,sans-serif;box-shadow:0 12px 30px rgba(0,0,0,.35)}
+  /* Host form-control guard. No shadow DOM, so a host's global control rule can out-rank ours: OrgSpace's
+     body:not(:has(.hal-app)) :is(input,select,textarea) sets min-height:44px + font-size:16px at (0,4,2), beating
+     (0,3,0) rules here. :not(#_pp) adds id weight (1,x,x) so each control re-asserts its own box + type. */
+  .dr-pop textarea:not(#_pp){font:13px/1.4 system-ui,sans-serif;letter-spacing:normal;text-transform:none;padding:8px 10px;min-height:64px;height:auto;max-height:none}
+  .dr-pop textarea.fix:not(#_pp){min-height:44px}
+  .dr-fp-bd textarea:not(#_pp){font:12px/1.4 system-ui,sans-serif;letter-spacing:normal;text-transform:none;padding:8px 10px;min-height:56px;height:auto;max-height:none}
+  .dr-dock-fly input[type=range]:not(#_pp){padding:0;margin:0;min-height:auto;height:24px;max-height:none}
+  .dr-dock-fly .tints input[type=color]:not(#_pp){padding:0;width:26px;min-height:auto;height:26px;max-height:none}
+  .dr-dock-fly .tints .hex:not(#_pp){font:11px ui-monospace,Menlo,monospace;letter-spacing:normal;text-transform:none;padding:0 7px;width:68px;min-height:auto;height:26px;max-height:none}`;
   const st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
 
   const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
@@ -1258,6 +1267,11 @@
   .dr-chat-stop{flex:none;width:28px;height:28px;display:grid;place-items:center;border:1px solid rgba(255,90,95,.35);background:rgba(255,90,95,.1);border-radius:999px;padding:0;cursor:pointer}
   .dr-chat-stop::before{content:'';width:9px;height:9px;border-radius:2px;background:#ff8a8e}
   .dr-chat-stop:hover{background:rgba(255,90,95,.22)}
+  /* Clicked: the square turns into a ring that spins until the worker has exited. It stays clickable — a second click kills it outright. */
+  .dr-chat-stop.stopping{background:rgba(255,90,95,.2);border-color:rgba(255,90,95,.6);box-shadow:inset 0 1px 3px rgba(0,0,0,.35);cursor:progress}
+  .dr-chat-stop.stopping::before{width:10px;height:10px;border-radius:50%;background:transparent;border:2px solid rgba(255,138,142,.35);border-top-color:#ff8a8e;animation:dr-stop-spin .8s linear infinite}
+  @keyframes dr-stop-spin{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion:reduce){.dr-chat-stop.stopping::before{animation:none;border-color:#ff8a8e;border-top-color:transparent}}
   .dr-chat-mw{flex:none;position:relative}
   .dr-chat-lt,.dr-chat-rt{display:flex;align-items:center;gap:6px;min-width:0}
   .dr-chat-rt .dr-chat-send{margin-left:5px}
@@ -1344,6 +1358,7 @@
   .dr-chat .m.tool.err::before{content:'⎿';left:18px;color:#ff8a8e}
   .dr-chat .m.status{font-size:11px;color:var(--dr-fg3b)}
   .dr-chat .m.status.err{color:#ff8a8e}
+  .dr-chat .m.status.qd{margin:-2px 0 4px;color:#39d98a;font:600 9.5px/1.4 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;opacity:.8} /* a card answer: the card above holds the picks */
   .dr-chat .m.status.handoff{display:grid;grid-template-columns:auto 1fr;column-gap:10px;align-items:start;margin:6px 0 6px 18px;padding:9px 12px 10px 10px;border-radius:10px;background:rgba(var(--dr-w),.05);border:1px solid rgba(var(--dr-w),.1)}
   .dr-chat .m.status.handoff .hi{grid-row:1/3;width:26px;height:26px;display:grid;place-items:center;border-radius:7px;background:rgba(var(--dr-w),.08);color:var(--dr-fg);font:700 11px/1 ui-monospace,Menlo,monospace}
   .dr-chat .m.status.handoff b{color:var(--dr-fg);font-weight:600;font-size:12px;line-height:1.3}
@@ -1352,7 +1367,7 @@
   .dr-chat .m.result.err{color:#ff8a8e;text-transform:none}
   .dr-chat .m kbd{font:10px ui-monospace,Menlo,monospace;background:rgba(var(--dr-w),.08);border:1px solid rgba(var(--dr-w),.14);border-radius:4px;padding:1px 5px}
   .dr-chat-st{padding:8px 16px 4px;font:10px ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--dr-fg3b);min-height:14px}
-  .dr-chat-st.working,.dr-chat-st.starting{color:#ffb457}.dr-chat-st.idle{color:#39d98a}.dr-chat-st.error,.dr-chat-st.disconnected{color:#ff8a8e}
+  .dr-chat-st.working,.dr-chat-st.starting{color:#ffb457}.dr-chat-st.stopping{color:#ff8a8e}.dr-chat-st.idle{color:#39d98a}.dr-chat-st.error,.dr-chat-st.disconnected{color:#ff8a8e}
   .dr-chat-in{position:relative;padding:10px 12px 6px;border-top:1px solid rgba(var(--dr-w),.07)}
   .dr-chat-slash{position:absolute;left:12px;right:12px;bottom:calc(100% + 4px);z-index:1;max-height:280px;overflow-y:auto;background:rgba(var(--dr-g),.97);border:1px solid rgba(var(--dr-w),.12);border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,.4);padding:4px;scrollbar-width:thin;scrollbar-color:rgba(var(--dr-w),.18) transparent}
   .dr-chat-slash .it{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:baseline;padding:6px 8px;border-radius:6px;cursor:pointer}
@@ -1413,11 +1428,32 @@
   .dr-chat-pins .it .rm{flex:none;width:20px;height:20px;border:0;border-radius:6px;background:transparent;color:var(--dr-fg3b);font:16px/20px system-ui,sans-serif;cursor:pointer;padding:0;opacity:0;align-self:center}
   .dr-chat-pins .it:hover .rm{opacity:1}.dr-chat-pins .it .rm:hover{background:rgba(255,90,95,.18);color:#ff5a5f}
   .dr-chat .m .pins{margin-top:6px;font:600 10px ui-monospace,Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;opacity:.75}
+  .dr-chat .m .pins.x{opacity:1;text-transform:none;letter-spacing:0;font:12px/1.5 ui-monospace,Menlo,SFMono-Regular,monospace}
+  .dr-chat .m .pins .ptg{display:inline-flex;align-items:center;gap:6px;margin:0;padding:3px 8px 3px 7px;border:1px solid rgba(var(--dr-w),.12);border-radius:999px;background:rgba(var(--dr-w),.05);color:var(--dr-fg2);font:600 10px/1.3 ui-monospace,Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;cursor:pointer}
+  .dr-chat .m .pins .ptg:hover,.dr-chat .m .pins .ptg[aria-expanded="true"]{background:rgba(var(--dr-w),.1);color:var(--dr-fg)}.dr-chat .m .pins .ptg:focus-visible{outline:1px solid rgba(var(--dr-w),.4);outline-offset:2px}
+  .dr-chat .m .pins .ptg .chev{display:inline-block;width:4px;height:4px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-1px) rotate(-45deg);transition:transform .18s cubic-bezier(.22,.61,.36,1)}
+  .dr-chat .m .pins .ptg[aria-expanded="true"] .chev{transform:translateY(-2px) rotate(45deg)}
+  .dr-chat .m .pins .pbd{margin-top:6px;padding:8px 10px;border-radius:10px;background:rgba(0,0,0,.22);border:1px solid rgba(var(--dr-w),.1)}
+  .dr-chat .m .pins .pbd[hidden]{display:none}
+  .dr-chat .m .pins .pg{margin-bottom:6px;color:var(--dr-fg3b);font-size:10.5px;overflow-wrap:anywhere}
+  .dr-chat .m .pins ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+  .dr-chat .m .pins li{display:flex;gap:8px;align-items:flex-start}.dr-chat .m .pins li+li{padding-top:8px;border-top:1px solid rgba(var(--dr-w),.07)}
+  .dr-chat .m .pins li .n{flex:none;min-width:20px;height:20px;padding:0 4px;box-sizing:border-box;border-radius:99px;background:#ff5a5f;color:#fff;font:700 10px/20px system-ui;text-align:center}
+  .dr-chat .m .pins li .pb{flex:1;min-width:0}
+  .dr-chat .m .pins .pk{font:600 9.5px/1.4 ui-monospace,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--dr-fg3b)}
+  .dr-chat .m .pins .pc{margin:1px 0 4px;color:var(--dr-fg);white-space:pre-wrap;overflow-wrap:anywhere}.dr-chat .m .pins .pc i{color:var(--dr-fg3b)}
+  .dr-chat .m .pins dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:11px}
+  .dr-chat .m .pins dt{color:var(--dr-fg3b)}.dr-chat .m .pins dd{margin:0;min-width:0;color:var(--dr-fg2);overflow-wrap:anywhere}
+  @media (prefers-reduced-motion:reduce){.dr-chat .m .pins .ptg .chev{transition:none}}
   .dr-lb{position:fixed;inset:0;z-index:2147483647;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:32px;box-sizing:border-box;background:rgba(0,0,0,.78);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);cursor:zoom-out;opacity:0;transition:opacity .18s ease}.dr-lb.on{opacity:1}
   .dr-lb img{max-width:100%;max-height:calc(100% - 34px);width:auto;height:auto;object-fit:contain;border-radius:10px;box-shadow:0 30px 80px rgba(0,0,0,.6);transition:transform .28s cubic-bezier(.22,.61,.36,1)}.dr-lb:not(.on) img{transform:scale(.96)}
   .dr-lb .cap{display:flex;gap:14px;align-items:center;font:11px ui-monospace,Menlo,monospace;color:rgba(255,255,255,.7);cursor:default}
   .dr-lb .cap a{color:#fff;text-decoration:none;padding:3px 9px;border-radius:999px;background:rgba(255,255,255,.12)}.dr-lb .cap a:hover{background:rgba(255,255,255,.22)}
-  @media (prefers-reduced-motion:reduce){.dr-lb,.dr-lb img{transition:none}}`;
+  @media (prefers-reduced-motion:reduce){.dr-lb,.dr-lb img{transition:none}}
+  /* Host form-control guard: same reason and :not(#_pp) booster as the one closing the main css. */
+  .dr-chat-sel .rn-in:not(#_pp){font:inherit;letter-spacing:normal;text-transform:none;padding:1px 6px;margin:0;min-height:auto;height:auto;max-height:none}
+  .dr-chat .m .qi:not(#_pp){font:12px/1.4 ui-monospace,Menlo,SFMono-Regular,monospace;letter-spacing:normal;text-transform:none;padding:7px 10px;min-height:auto;height:auto;max-height:none}
+  .dr-chat-ta:not(#_pp){font:13px/1.4 system-ui,sans-serif;letter-spacing:normal;text-transform:none;padding:9px 11px 4px;min-height:44px;height:72px;max-height:50vh}`;
   let chatLs = null, chatTa = null, chatSel = null, chatSt = null, chatSendBtn = null, chatStopBtn = null, chatTermBtn = null, chatModel = null, chatEffort = null, chatEs = null, chatConvos = [], chatPoll = null, chatAtBottom = true;
   let chatAtt = null, chatFiles = []; // pending attachments: { name, type, data (base64), img, preview?, w?, h?, size? }
   const IMG_MAX_EDGE = 1600, IMG_MAX = 6, FILE_MAX_BYTES = 6_000_000;
@@ -1427,7 +1463,27 @@
   const imgsHtml = (imgs) => Array.isArray(imgs) && imgs.length ? `<div class="imgs">${imgs.map((i) => (i.img === false
     ? `<a class="doc" href="${esc(API + i.url)}" target="_blank" rel="noopener" title="${esc(i.name || '')}">${fileTileHtml(i.name)}</a>`
     : `<img src="${esc(API + i.url)}" alt="${esc(i.name || '')}" title="${esc(i.name || '')}">`)).join('')}</div>` : '';
-  const pinsHtml = (p) => p && p.count ? `<div class="pins">📌 ${p.count} pin${p.count === 1 ? '' : 's'} · #${p.first}${p.count > 1 ? '–#' + (p.first + p.count - 1) : ''}</div>` : '';
+  // A pin chip that carries its pins (rows, from 0.9.0 servers — and filled in on replay for older lines) is a toggle that
+  // opens to what each pin held: the note, the fix, what it was pinned on, where. A count-only chip stays a plain label.
+  let pinsSeq = 0;
+  const pinRowHtml = (r) => {
+    const kv = (k, v) => (v ? `<dt>${k}</dt><dd>${v}</dd>` : ''), e = r.element, nr = r.near, rc = r.rect, sr = r.source;
+    const on = e ? `<code>${esc(e.tag || '')}</code> ${esc(e.path || '')}` : nr ? `an area near ${esc(nr.path || '')}` : rc ? 'a drawn area' : '';
+    const txt = (e && e.text) || (nr && nr.text) || '';
+    return `<li><span class="n">${esc(r.n)}</span><div class="pb"><div class="pk">${esc(r.type || 'note')}${e ? ' · ' + esc(e.tag || '') : nr ? ' · area' : ''}</div><div class="pc">${r.comment ? esc(r.comment) : '<i>no comment</i>'}</div><dl>`
+      + kv('fix', r.fix ? esc(r.fix) : '') + kv('on', on) + kv('text', txt ? '\u201c' + esc(txt) + '\u201d' : '')
+      + kv('source', sr && sr.file ? pathHtml(sr.file + (sr.line ? ':' + sr.line + (sr.column ? ':' + sr.column : '') : '')) : '') + kv('widget', r.widget ? esc(r.widget) : '')
+      + kv('box', rc ? esc(Math.round(rc.w) + '\u00d7' + Math.round(rc.h) + ' at ' + Math.round(rc.x) + ',' + Math.round(rc.y)) + (r.scrollY ? ' \u00b7 scrolled ' + esc(Math.round(r.scrollY)) + 'px' : '') : '')
+      + kv('state', r.state ? `<code>${esc(r.state)}</code>` : '') + '</dl></div></li>';
+  };
+  const pinsHtml = (p) => {
+    if (!p || !p.count) return '';
+    const label = `📌 ${p.count} pin${p.count === 1 ? '' : 's'} · #${p.first}${p.count > 1 ? '–#' + (p.first + p.count - 1) : ''}`;
+    if (!Array.isArray(p.rows) || !p.rows.length) return `<div class="pins">${label}</div>`;
+    let pg = p.page || ''; try { if (pg) { const u = new URL(pg); pg = u.pathname + u.search + u.hash; } } catch (e) {}
+    const id = 'dr-pins-' + ++pinsSeq;
+    return `<div class="pins x"><button type="button" class="ptg" aria-expanded="false" aria-controls="${id}" title="Show what these pins hold"><i class="chev" aria-hidden="true"></i>${label}</button><div class="pbd" id="${id}" hidden>${pg ? `<div class="pg">sent from ${esc(pg)}</div>` : ''}<ol>${p.rows.map(pinRowHtml).join('')}</ol></div></div>`;
+  };
   // Any file can ride along. An image is downscaled and sent inline, because that is the only way the
   // model can see it; everything else is sent as-is and lands as a path the worker can Read.
   function addFile(file) {
@@ -1629,7 +1685,7 @@
     selMenu.addEventListener('click', (e) => { const it = e.target.closest('.it'); if (!it || it.classList.contains('dis') || e.target.closest('.rn-in')) return; if (e.target.closest('.rn')) { renameConvo(it); return; } if (e.target.closest('.cl')) { closeConvo(it, e.target.closest('.cl')); return; } menuClose(); selectConvo(it.dataset.id || null); });
     chatSel.append(selTg, selMenu); chatSel._tg = selTg; chatSel._menu = selMenu; selSync(); // placeholder label until the list loads
     chatStopBtn = el('button', 'dr-chat-stop'); chatStopBtn.type = 'button'; chatStopBtn.setAttribute('aria-label', 'Stop the worker'); chatStopBtn.title = 'Stop — end this worker process now (your next message resumes the same session)';
-    chatStopBtn.onclick = () => { if (chatUi.cur) fetch(API + BRAND.chat + '/' + encodeURIComponent(chatUi.cur) + '/stop', { method: 'POST' }).catch(() => {}); };
+    chatStopBtn.onclick = stopConvo;
     chatTermBtn = el('button', 'dr-chat-term', '&gt;_'); chatTermBtn.type = 'button'; chatTermBtn.setAttribute('aria-label', 'Continue in a terminal'); chatTermBtn.title = 'Continue in a terminal — copies the claude --resume command for this conversation and ends the worker';
     chatTermBtn.onclick = () => handoffConvo();
     bar.append(chatSel); loadRoot(); // every action lives in the composer row below
@@ -1743,6 +1799,7 @@
       const t = e.target; if (t instanceof HTMLImageElement && t.closest('.imgs')) return openLightbox(t.src, t.alt, t.getBoundingClientRect());
       const cp = t instanceof Element ? t.closest('.cp') : null; if (cp) { const pre = cp.parentElement && cp.parentElement.querySelector('pre'); copyText(pre ? pre.textContent : '', cp); return; }
       const pth = t instanceof Element ? t.closest('.pth') : null; if (pth) { reveal(pth); return; }
+      const ptg = t instanceof Element ? t.closest('.pins .ptg') : null; if (ptg) { const bd = ptg.nextElementSibling, open = ptg.getAttribute('aria-expanded') !== 'true'; ptg.setAttribute('aria-expanded', String(open)); if (bd) bd.hidden = !open; return; } // a button: Enter and Space click it too
       const qb = t instanceof Element ? t.closest('.qb') : null;
       // The choices and the text field are two ways to answer the SAME question, so the last one
       // used wins: tapping clears what was typed, and typing (below) clears the tap. Sending both
@@ -1796,18 +1853,19 @@
     const n = (cls, html) => { const d = el('div', 'm ' + cls); d.innerHTML = html; if (hh) d.dataset.at = hh; return d; };
     switch (ev.t) {
       case 'batch': if (ev.update) return n('status handoff', '<span class="hi" aria-hidden="true">&uarr;</span><b>Updating pinpoint ' + esc(ev.update.from) + ' \u2192 ' + esc(ev.update.to) + '</b><span class="sub">A headless worker runs <code>' + esc(ev.update.command || '') + '</code>; when it is done the server restarts on the new version, and the recap below says what changed.</span>'); // an update conversation opens on what it is doing, not on a note
-        return n('user', md(ev.general || '') + pinsHtml(ev.pins ? { count: ev.pins, first: 1 } : null) + imgsHtml(ev.images)); // the note that started the worker reads like any later message
+        return n('user', md(ev.general || '') + pinsHtml(ev.pins ? { count: ev.pins, first: 1, rows: ev.rows, page: ev.page } : null) + imgsHtml(ev.images)); // the note that started the worker reads like any later message
       case 'user': return n('user', md(ev.text) + pinsHtml(ev.pins) + imgsHtml(ev.images));
       case 'assistant': { const t = noStamp(ev.text); return t.trim() ? n('ai', md(t)) : null; }
       case 'tool': return n('tool', `<span class="tn">${esc(String(ev.name || '').replace(/^mcp__pinpoint__/, 'pinpoint:'))}</span>${ev.summary ? '(<span class="ts">' + esc(ev.summary) + '</span>)' : ''}`);
       case 'tool_error': return n('tool err', esc(ev.text));
-      case 'result': return n('result' + (ev.ok ? '' : ' err'), ev.ok ? `turn done · ${Math.round((ev.ms || 0) / 1000)}s${ev.cost ? ' · $' + Number(ev.cost).toFixed(2) : ''}` : 'turn failed · ' + esc(ev.text || ev.subtype || ''));
+      case 'result': if (ev.stopped) return n('result', 'turn stopped'); return n('result' + (ev.ok ? '' : ' err'), ev.ok ? `turn done · ${Math.round((ev.ms || 0) / 1000)}s${ev.cost ? ' · $' + Number(ev.cost).toFixed(2) : ''}` : 'turn failed · ' + esc(ev.text || ev.subtype || ''));
       case 'status':
         if (ev.compacted) return n('status', 'context compacted' + (ev.pre ? ' · ' + (ev.pre / 1000).toFixed(1) + 'k → ' + (ev.post / 1000).toFixed(1) + 'k tokens' : ''));
         if (ev.handoff) return n('status handoff', '<span class="hi" aria-hidden="true">&gt;_</span><b>Handed off to a terminal</b><span class="sub">The resume command is on your clipboard — paste it in a terminal to carry this session on there. A message here starts a new worker on the same session.</span>');
         if (ev.modelSet) return n('status', 'model \u2192 ' + esc(modelLabel(ev.model)) + ' — the worker restarts on it, resuming this session');
         if (ev.effortSet) return n('status', 'effort \u2192 ' + esc(effortLabel(ev.effort)) + ' — the worker restarts on it, resuming this session');
-        // idle-recap, stopping and exited say nothing the header status line does not: they stay out of the transcript
+        if (ev.stopped && ev.state === 'exited') return n('status', 'stopped \u00b7 your next message resumes this session'); // the reviewer's Stop landed: say so where they are reading
+        // idle-recap, stopping and a plain exit say nothing the header status line does not: they stay out of the transcript
         if (ev.note) return n('status', esc(ev.text)); // a line the drawer itself adds (the restart came back, say)
         if (ev.restarting) return n('status', 'restarting the pinpoint server on ' + esc(ev.to || '') + '\u2026 the drawer reconnects on its own');
         if (ev.state === 'starting') return n('status', ev.resume ? 'resuming the worker session…' : 'starting a worker…');
@@ -1822,8 +1880,8 @@
   // A reviewer message settles every open question block above it (also on replay after a reload): lock
   // it and highlight what was sent per step, so a stale block cannot be answered twice.
   function lockQuestions(text) {
-    const all = String(text == null ? '' : text), lines = all.split('\n');
-    chatLs.querySelectorAll('.qa:not(.answered)').forEach((qa) => {
+    const all = String(text == null ? '' : text), lines = all.split('\n'), open = chatLs.querySelectorAll('.qa:not(.answered)');
+    open.forEach((qa) => {
       qa.classList.add('answered');
       const steps = [...qa.querySelectorAll('.qstep')];
       steps.forEach((st) => {
@@ -1848,12 +1906,28 @@
         if (inp && typed) { inp.value = typed; if (slot) slot.classList.add('on'); }
       });
     });
+    return open.length;
+  }
+  // An answer sent from the cards (the server tags its line with `answers`) is already on the card it settled — picks
+  // lit, typed text in place — so the transcript gets a one-line marker instead of every question echoed back. Only
+  // when a card is there to hold it: the live one just submitted, or an open one this line locks on replay. Otherwise
+  // (a /clear took the card, an older line without the tag) the message reads as the full bubble it always was.
+  let chatAnsPending = null;
+  function answeredLine(ev) {
+    const hh = ev.at && !isNaN(new Date(ev.at)) ? new Date(ev.at).toTimeString().slice(0, 8) : '';
+    const d = el('div', 'm status qd'); d.textContent = '\u2713 answered'; if (hh) d.dataset.at = hh;
+    d.title = ev.answers.map((x) => (x.q ? x.q + ' \u2192 ' : '') + x.a).join('\n'); return d;
   }
   function chatAppend(ev) {
     if (!chatLs) return; if (ev.t === 'status' && ev.closed) { if (chatEs) { chatEs.close(); chatEs = null; } dropConvo(chatUi.cur); return; } // closed (here or in another tab): leave it
     if (ev.t === 'status' && ev.reset) { chatLs.innerHTML = ''; chatAtBottom = true; snForget(chatUi.cur, Date.parse(ev.at)); return; } // /clear wipes the drawer transcript and the batch's pins: live, and on replay so a reload stays cleared
     if (ev.t === 'result' && ev.ok && !chatLs.firstElementChild) return; // the /clear turn's 'turn done' would be the only thing left on the blank slate
-    if (ev.t === 'user') lockQuestions(ev.text); const node = chatLine(ev); if (!node) return;
+    let node = null;
+    if (ev.t === 'user') {
+      const locked = lockQuestions(ev.text), pend = chatAnsPending && chatAnsPending.isConnected; chatAnsPending = null;
+      if (Array.isArray(ev.answers) && ev.answers.length && (locked || pend) && !(ev.pins && ev.pins.count) && !(ev.images && ev.images.length)) node = answeredLine(ev);
+    }
+    node = node || chatLine(ev); if (!node) return;
     if (ev.t === 'tool_error') { const last = [...chatLs.querySelectorAll('.m.tool:not(.err)')].pop(); if (last) last.classList.add('failed'); } // the failed call's dot turns red
     // A recap closes the stretch of work, so the transcript ends on it: the 'turn done' line that
     // follows one is noise. A failed turn still gets its row.
@@ -1876,13 +1950,41 @@
       m.classList.toggle('rc-only', old && solo);
     });
   }
+  // Stopping lasts from the click (or the server's `stopping` line) until the worker has gone: the header says so and
+  // the button spins, whatever status lines pass in between. A settled state or another conversation ends it.
+  let chatStopping = false, chatState = null, chatStateEv = null;
+  function stopSync() {
+    if (!chatStopBtn) return;
+    chatStopBtn.classList.toggle('stopping', chatStopping);
+    chatStopBtn.setAttribute('aria-label', chatStopping ? 'Stopping the worker \u2014 click again to kill it now' : 'Stop the worker');
+    chatStopBtn.title = chatStopping ? 'Stopping\u2026 click again to kill the worker now' : 'Stop \u2014 cancel what the worker is doing and end its process (your next message resumes the same session)';
+  }
   function chatStatus(state, ev) {
     if (!chatSt) return;
+    if (ev && ev.stopping) chatStopping = true;
+    if (!state || state === 'exited' || state === 'error' || state === 'connecting' || (state === 'idle' && chatState !== 'idle' && !(ev && ev.stopping))) chatStopping = false; // idle only as a change: a Stop clicked while idle keeps its look until the exit
+    chatState = state; chatStateEv = ev || null;
     const map = { connecting: 'connecting…', starting: ev && ev.resume ? 'resuming worker…' : 'starting worker…', working: 'working…', idle: 'idle — your turn', exited: 'worker exited · a message resumes it', error: 'worker error', disconnected: 'stream lost — retrying', restarting: 'restarting the server\u2026' };
-    chatSt.textContent = state ? map[state] || state : '';
-    chatSt.className = 'dr-chat-st ' + (state || '');
+    chatSt.textContent = chatStopping ? 'stopping\u2026' : state ? map[state] || state : '';
+    chatSt.className = 'dr-chat-st ' + (chatStopping ? 'stopping' : state || '');
     if (chatStopBtn) chatStopBtn.style.display = state === 'working' || state === 'idle' || state === 'starting' ? '' : 'none';
     if (chatTermBtn) chatTermBtn.style.display = state ? '' : 'none';
+    stopSync();
+  }
+  // Stop: the look changes on the click, before the server answers. The server interrupts the turn in flight and ends
+  // the process; a second click while that is under way kills it outright. A failed request puts the button back.
+  async function stopConvo() {
+    const id = chatUi.cur; if (!id) return;
+    chatStopping = true; chatStatus(chatState, chatStateEv);
+    try {
+      const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(id) + '/stop', { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error([j.error, j.hint].filter(Boolean).join(' \u2014 ') || 'HTTP ' + r.status);
+      if (j.stop === 'none' && chatUi.cur === id) { chatStopping = false; chatStatus(chatState, null); } // nothing was running: the stream's next status settles the header
+    } catch (e) {
+      if (chatUi.cur === id) { chatStopping = false; chatStatus(chatState, null); }
+      chatAppend({ t: 'error', text: 'Stop failed \u2014 ' + (e && e.message ? e.message : e), at: new Date().toISOString() });
+    }
   }
   const convoParts = (c) => { let path = c.page; try { path = new URL(c.page).pathname; } catch (e) {} const t = new Date(c.startedAt || c.lastAt); const hh = isNaN(t) ? '' : t.toTimeString().slice(0, 5); if (c.kind === 'update' && c.update) return { lb: `${hh} \u2191 pinpoint ${c.update.from} \u2192 ${c.update.to}`, pins: 'update', st: String(c.state || '') }; return { lb: `${hh} ${path}`, pins: c.pins ? c.pins + ' pin' + (c.pins === 1 ? '' : 's') : 'note', st: String(c.state || '') }; };
   // How long an idle conversation has before the server closes it (worker.idleMinutes). The countdown
@@ -2093,12 +2195,13 @@
     const text = steps.length === 1 ? [answers[0].choice, answers[0].typed].filter(Boolean).join('\n')
       : steps.map((x, i) => (x.dataset.q || 'Q' + (i + 1)) + ' \u2192 ' + (answers[i].choice ? answers[i].choice + (answers[i].typed ? ' \u00b7 ' + answers[i].typed : '') : answers[i].typed)).join('\n');
     const slots = steps.map((x, i) => answers[i].typed ? x.querySelector('.qf') : null).filter(Boolean);
-    qa.classList.add('answered'); slots.forEach((f) => f.classList.add('on'));
+    const pairs = steps.map((x, i) => ({ q: x.dataset.q || (steps.length > 1 ? 'Q' + (i + 1) : ''), a: [answers[i].choice, answers[i].typed].filter(Boolean).join(steps.length === 1 ? '\n' : ' \u00b7 ') })); // tags the transcript line: the card stays the record
+    qa.classList.add('answered'); slots.forEach((f) => f.classList.add('on')); chatAnsPending = qa;
     try {
-      const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(chatUi.cur), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+      const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(chatUi.cur), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, answers: pairs }) });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error([j.error, j.hint].filter(Boolean).join(' \u2014 ') || String(r.status));
-    } catch (e) { qa.classList.remove('answered'); slots.forEach((f) => f.classList.remove('on')); chatAppend({ t: 'error', text: 'Send failed \u2014 ' + (e && e.message ? e.message : e), at: new Date().toISOString() }); }
+    } catch (e) { if (chatAnsPending === qa) chatAnsPending = null; qa.classList.remove('answered'); slots.forEach((f) => f.classList.remove('on')); chatAppend({ t: 'error', text: 'Send failed \u2014 ' + (e && e.message ? e.message : e), at: new Date().toISOString() }); }
   }
   async function chatSubmit() {
     if (!chatTa) return;
@@ -2110,7 +2213,7 @@
     const consumePins = () => { if (pins.length) { state.pins = []; save(); closePop(); } };
     try {
       if (chatUi.cur) {
-        const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(chatUi.cur), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, images, pins, model: modelPref(), effort: effortPref() }) });
+        const r = await fetch(API + BRAND.chat + '/' + encodeURIComponent(chatUi.cur), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, images, pins, page: location.href, model: modelPref(), effort: effortPref() }) });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error([j.error, j.hint].filter(Boolean).join(' — ') || String(r.status));
         if (pins.length) {

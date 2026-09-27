@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { BIN, cleanEnv, freePort, mcpClient, tmpProject, waitFor } from './helpers.ts';
+import { BIN, cleanEnv, freePort, mcpClient, replay, tmpProject, waitFor } from './helpers.ts';
 
 const APP_ORIGIN = 'http://acme.localhost:5173';
 let port: number;
@@ -22,6 +22,16 @@ beforeAll(async () => {
     '.docs/pinpoint/workers/old-batch.json': JSON.stringify({ batchId: 'old-batch', workerId: 'w1', sessionUuid: '00000000-0000-0000-0000-000000000000', page: `${APP_ORIGIN}/home`, title: 'Home', state: 'idle', started: true, startedAt: '2026-01-01T00:00:00.000Z', lastAt: '2026-01-01T00:00:00.000Z', turns: 1, costUsd: 0 }),
     // a second revived conversation, so the model tests do not depend on the close test's ordering
     '.docs/pinpoint/workers/model-batch.json': JSON.stringify({ batchId: 'model-batch', workerId: 'w2', sessionUuid: '00000000-0000-0000-0000-000000000002', page: `${APP_ORIGIN}/home`, title: 'Home', state: 'exited', started: true, startedAt: '2026-01-01T00:00:00.000Z', lastAt: '2026-01-01T00:00:00.000Z', turns: 1, costUsd: 0 }),
+    // a transcript from before pin chips carried their pins: only { first, count } on each line, the pins themselves in
+    // the saved batch — which a /clear (the reset line) emptied, so only the chip after it matches what the batch holds now
+    '.docs/pinpoint/workers/pins-batch.json': JSON.stringify({ batchId: 'pins-batch', workerId: 'w3', sessionUuid: '00000000-0000-0000-0000-000000000003', page: `${APP_ORIGIN}/home`, title: 'Home', state: 'exited', started: true, startedAt: '2026-01-01T00:00:00.000Z', lastAt: '2026-01-01T00:00:00.000Z', turns: 2, costUsd: 0 }),
+    '.docs/pinpoint/workers/pins-batch.chat.jsonl': [
+      { at: '2026-01-01T00:00:00.000Z', t: 'batch', pins: 1, general: 'first look', page: `${APP_ORIGIN}/home`, title: 'Home', images: [] },
+      { at: '2026-01-01T00:01:00.000Z', t: 'user', text: 'See the new pins.', images: [], pins: { first: 2, count: 1 } },
+      { at: '2026-01-01T00:02:00.000Z', t: 'status', state: 'idle', reset: true, pins: 2 },
+      { at: '2026-01-01T00:03:00.000Z', t: 'user', text: 'See the new pins.', images: [], pins: { first: 1, count: 1 } },
+    ].map((e) => JSON.stringify(e)).join('\n') + '\n',
+    '.docs/pinpoint/feedback/pins-batch.claimed-w3.json': JSON.stringify({ id: 'pins-batch', receivedAt: '2026-01-01T00:00:00.000Z', page: `${APP_ORIGIN}/home`, title: 'Home', general: 'first look', pins: [{ type: 'bug', comment: 'after the clear', rect: { x: 1, y: 2, w: 3, h: 4 }, element: { tag: 'a', path: 'nav > a', text: 'Home' } }], to: 'w3', claimedBy: 'w3' }),
   });
   base = `http://127.0.0.1:${port}`;
   writeFileSync(openStub(), '#!/bin/sh\nprintf "%s\\n" "$@" >> "$0.log"\n', { mode: 0o755 });
@@ -82,6 +92,15 @@ describe('HTTP owner', () => {
     // the transcript keeps the command, so the drawer shows it again after a reload
     const lines = readFileSync(join(project.root, '.docs', 'pinpoint', 'workers', 'old-batch.chat.jsonl'), 'utf8').trim().split('\n');
     expect(JSON.parse(lines[lines.length - 1])).toMatchObject({ t: 'status', handoff: true, command: j.command });
+  });
+  test('an old transcript replays its pin chips with the pins filled in from the batch, but only after the last /clear', async () => {
+    const evs = await replay(base, 'pins-batch');
+    const users = evs.filter((e: any) => e.t === 'user');
+    expect(users[0].pins).toEqual({ first: 2, count: 1 }); // before the reset: the batch no longer holds that pin, so no rows
+    expect(evs.find((e: any) => e.t === 'batch').rows).toBeUndefined(); // nor the original pin
+    expect(users[1].pins.rows).toEqual([expect.objectContaining({ n: 1, type: 'bug', comment: 'after the clear', element: { tag: 'a', path: 'nav > a', text: 'Home' } })]);
+    // the file on disk is not rewritten: the rows are filled in on the way out
+    expect(readFileSync(join(project.root, '.docs', 'pinpoint', 'workers', 'pins-batch.chat.jsonl'), 'utf8')).not.toContain('after the clear');
   });
   test('close drops a worker conversation and parks its record so a restart does not revive it', async () => {
     let chats = await (await fetch(base + '/api/chat')).json();
@@ -350,6 +369,172 @@ describe('worker dispatch spawns claude with the picked model', () => {
   }, 30000);
 });
 
+// Stop from the drawer. Closing stdin alone lets claude run the turn in flight to its end (tool calls and all), so the
+// reviewer's Stop sends the stream-json interrupt first. The stub behaves like claude -p does (checked against 2.1.283):
+// a message saying LONGTURN starts a turn that only an interrupt ends — control_response, then an error_during_execution
+// result — and EOF then exits 1. STUBBORN ignores the interrupt and EOF alike, so only a kill ends it.
+describe('Stop from the overlay', () => {
+  const ORIGIN = 'http://stop.localhost:5173';
+  let sPort: number;
+  let sProject: ReturnType<typeof tmpProject>;
+  let sOwner: ReturnType<typeof Bun.spawn>;
+  let sBase: string;
+
+  beforeAll(async () => {
+    sPort = await freePort();
+    sProject = tmpProject({
+      'fake-claude.sh': [
+        '#!/bin/sh',
+        'd="$(dirname "$0")"',
+        'printf \'%s\\n\' "$@" > "$d/argv-$$.txt"',
+        'echo \'{"type":"system","subtype":"init","model":"stub"}\'',
+        'stubborn=0',
+        'while IFS= read -r line; do',
+        '  printf \'%s\\n\' "$line" >> "$d/stdin-$$.txt"',
+        '  case "$line" in',
+        '    *\'"subtype":"interrupt"\'*)',
+        '      [ $stubborn = 1 ] && continue',
+        '      echo \'{"type":"control_response","response":{"subtype":"success","request_id":"x","response":{"still_queued":[]}}}\'',
+        '      echo \'{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"The user doesn\'"\'"\'t want to proceed with this tool use."}]}}\'',
+        '      echo \'{"type":"result","subtype":"error_during_execution","is_error":true,"duration_ms":5,"num_turns":1,"total_cost_usd":0}\' ;;',
+        '    *STUBBORN*) stubborn=1; echo \'{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"sleep 600"}}]}}\' ;;',
+        '    *LONGTURN*) echo \'{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"sleep 600"}}]}}\' ;;',
+        '    *) echo \'{"type":"result","subtype":"success","is_error":false,"duration_ms":1,"num_turns":1,"total_cost_usd":0}\' ;;',
+        '  esac',
+        'done',
+        '[ $stubborn = 1 ] && i=0 && while [ $i -lt 30 ]; do sleep 1; i=$((i+1)); done', // bounded, so a failing run never leaves one behind
+        'exit 1',
+      ].join('\n') + '\n',
+    });
+    writeFileSync(join(sProject.root, '.pinpoint.json'), JSON.stringify({ port: sPort, name: 'stop', dispatch: 'worker', claudeBin: join(sProject.root, 'fake-claude.sh'), apps: [{ dir: '.', origin: ORIGIN }] }));
+    Bun.spawnSync(['chmod', '+x', join(sProject.root, 'fake-claude.sh')]);
+    sBase = `http://127.0.0.1:${sPort}`;
+    sOwner = Bun.spawn(['bun', BIN, 'serve'], { cwd: sProject.root, env: cleanEnv({ PINPOINT_ROOT: sProject.root, PINPOINT_ROLE: 'http', PINPOINT_DETACHED: '1', PINPOINT_NO_UPDATE_CHECK: '1' }), stdout: 'ignore', stderr: 'pipe' });
+    await waitFor(async () => (await fetch(sBase + '/api/health')).ok, 15000);
+  }, 20000);
+  afterAll(() => { try { sOwner.kill(); } catch {} sProject.rm(); });
+
+  const sPost = (path: string, body: unknown) => fetch(sBase + path, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: ORIGIN }, body: JSON.stringify(body) });
+  const sendBatch = async (general: string, pins: unknown[] = []) => {
+    const r = await sPost('/api/pins', { page: `${ORIGIN}/home`, title: 'Home', general, pins, to: 'worker' });
+    expect(r.status).toBe(200);
+    return (await r.json()).id as string;
+  };
+  const row = async (id: string) => (await (await fetch(sBase + '/api/chat')).json()).find((c: any) => c.id === id);
+  const transcript = (id: string) => readFileSync(join(sProject.root, '.docs', 'pinpoint', 'workers', `${id}.chat.jsonl`), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  /** The stdin the stub recorded for this batch's process (its prompt names the batch id). */
+  const stdinOf = (id: string) => readdirSync(sProject.root).filter((n) => n.startsWith('stdin-')).map((n) => readFileSync(join(sProject.root, n), 'utf8')).find((t) => t.includes(id)) || '';
+  const working = (id: string) => waitFor(async () => (await row(id)).state === 'working' && stdinOf(id).length > 0, 10000);
+
+  test('Stop interrupts the turn in flight before closing stdin: the worker exits at once, as stopped rather than failed', async () => {
+    const id = await sendBatch('LONGTURN please');
+    await working(id);
+    const t0 = Date.now();
+    const r = await sPost(`/api/chat/${id}/stop`, {});
+    expect(r.status).toBe(200);
+    expect((await r.json()).stop).toBe('stopping');
+    await waitFor(async () => (await row(id)).state === 'exited', 2500, 50); // well inside the 3s kill: the interrupt did it
+    expect(Date.now() - t0).toBeLessThan(2500);
+    const lines = stdinOf(id).trim().split('\n').map((l) => JSON.parse(l));
+    const last = lines[lines.length - 1];
+    expect(last).toMatchObject({ type: 'control_request', request: { subtype: 'interrupt' } });
+    expect(typeof last.request_id).toBe('string');
+    const evs = transcript(id);
+    const at = evs.findIndex((e: any) => e.t === 'status' && e.stopping);
+    expect(evs[at]).toMatchObject({ stopping: 'stopped from the overlay', user: true });
+    const after = evs.slice(at + 1);
+    expect(after.find((e: any) => e.t === 'result')).toMatchObject({ ok: false, stopped: true }); // "turn stopped", not "turn failed"
+    expect(after.some((e: any) => e.t === 'tool_error')).toBe(false); // the cancelled tool call is not a failure to report
+    expect(after.some((e: any) => e.t === 'status' && e.state === 'idle')).toBe(false); // no "your turn" flash on the way out
+    expect(after.find((e: any) => e.t === 'status' && e.state === 'exited')).toMatchObject({ stopped: true, code: 1 });
+    expect(after.some((e: any) => e.t === 'status' && e.state === 'error')).toBe(false);
+    // the next message resumes the same session and is answered like any other: nothing left in flight
+    expect((await sPost(`/api/chat/${id}`, { text: 'carry on' })).status).toBe(200);
+    await waitFor(async () => (await row(id)).state === 'idle', 10000);
+    expect(transcript(id).filter((e: any) => e.t === 'result').pop()).toMatchObject({ ok: true });
+  }, 30000);
+
+  test('a second Stop while the first is under way kills the process at once', async () => {
+    const id = await sendBatch('STUBBORN please');
+    await working(id);
+    expect((await (await sPost(`/api/chat/${id}/stop`, {})).json()).stop).toBe('stopping');
+    await Bun.sleep(300);
+    expect((await row(id)).state).toBe('working'); // it ignored the interrupt and EOF
+    const t0 = Date.now();
+    expect((await (await sPost(`/api/chat/${id}/stop`, {})).json()).stop).toBe('killed');
+    await waitFor(async () => (await row(id)).state === 'exited', 2000, 50);
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(transcript(id).filter((e: any) => e.t === 'status' && e.state === 'exited').pop()).toMatchObject({ stopped: true });
+  }, 30000);
+
+  test('one Stop on a process that ignores it is killed about 3s later, not 15s', async () => {
+    const id = await sendBatch('STUBBORN again');
+    await working(id);
+    const t0 = Date.now();
+    await sPost(`/api/chat/${id}/stop`, {});
+    await waitFor(async () => (await row(id)).state === 'exited', 8000, 100);
+    const took = Date.now() - t0;
+    expect(took).toBeGreaterThanOrEqual(2500);
+    expect(took).toBeLessThan(6000);
+  }, 30000);
+
+  test('Stop on a conversation with no process says so', async () => {
+    const id = await sendBatch('quick one');
+    await waitFor(async () => (await row(id)).state === 'idle', 10000);
+    await sPost(`/api/chat/${id}/stop`, {});
+    await waitFor(async () => (await row(id)).state === 'exited', 5000, 50);
+    expect((await (await sPost(`/api/chat/${id}/stop`, {})).json()).stop).toBe('none');
+  }, 30000);
+
+  test("the server's own stops (a model change) close stdin without an interrupt, and are not marked stopped", async () => {
+    const id = await sendBatch('quick one');
+    await waitFor(async () => (await row(id)).state === 'idle', 10000);
+    expect((await sPost(`/api/chat/${id}/model`, { model: 'haiku' })).status).toBe(200);
+    await waitFor(async () => (await row(id)).state === 'exited', 10000);
+    expect(stdinOf(id)).not.toContain('"interrupt"');
+    const evs = transcript(id);
+    expect(evs.find((e: any) => e.t === 'status' && e.stopping)).toMatchObject({ stopping: 'model change' });
+    expect(evs.find((e: any) => e.t === 'status' && e.stopping).user).toBeUndefined();
+    expect(evs.filter((e: any) => e.t === 'status' && e.state === 'exited').pop().stopped).toBeUndefined();
+  }, 30000);
+
+  // The pin chip on a message opens to show what each pin held, so the transcript line has to carry the pins.
+  test('the first message and every later one carry what their pins hold: comment, target, page', async () => {
+    const pin = { type: 'bug', comment: 'overlaps <the> logo', fix: 'nudge it', rect: { x: 1, y: 2, w: 3, h: 4 }, element: { tag: 'button', path: 'main > button', text: 'Save' }, state: { route: '/home' }, scrollY: 40 };
+    const id = await sendBatch('look', [pin]);
+    await waitFor(async () => (await row(id)).state === 'idle', 10000);
+    const first = transcript(id).find((e: any) => e.t === 'batch');
+    expect(first.pins).toBe(1); // still the count older drawers read
+    expect(first.rows).toEqual([expect.objectContaining({ n: 1, type: 'bug', comment: 'overlaps <the> logo', fix: 'nudge it', element: { tag: 'button', path: 'main > button', text: 'Save' }, rect: { x: 1, y: 2, w: 3, h: 4 }, scrollY: 40 })]);
+    expect(first.rows[0].state).toBe('{"route":"/home"}'); // app state rides along as a capped string
+    const near = { rect: { x: 5, y: 6, w: 70, h: 80 }, element: null, near: { path: 'main > div', text: 'Card' }, type: '', comment: 'too tight', fix: '', state: null, scrollY: 0 };
+    expect((await sPost(`/api/chat/${id}`, { text: 'more', pins: [near], page: `${ORIGIN}/settings` })).status).toBe(200);
+    await waitFor(async () => transcript(id).some((e: any) => e.t === 'user'), 5000);
+    const user = transcript(id).find((e: any) => e.t === 'user');
+    expect(user.pins).toMatchObject({ first: 2, count: 1, page: `${ORIGIN}/settings` });
+    expect(user.pins.rows).toEqual([expect.objectContaining({ n: 2, comment: 'too tight', near: { path: 'main > div', text: 'Card' } })]);
+    expect(user.pins.rows[0].state).toBeUndefined();
+  }, 30000);
+
+  // An answer from the drawer's question cards is tagged on its transcript line, so the drawer can let the answered card
+  // stand as the record instead of echoing every question back as a message. The worker still gets the full text.
+  test('an answer sent from question cards is tagged with its question/answer pairs; junk is dropped', async () => {
+    const id = await sendBatch('quick one');
+    await waitFor(async () => (await row(id)).state === 'idle', 10000);
+    const text = 'Which surface? → Desktop\nWhich tone? → Warm · but not cute';
+    const answers = [{ q: 'Which surface?', a: 'Desktop' }, { q: 'Which tone?', a: 'Warm · but not cute' }, { q: 7, a: null }, 'nope'];
+    expect((await sPost(`/api/chat/${id}`, { text, answers })).status).toBe(200);
+    await waitFor(async () => transcript(id).some((e: any) => e.t === 'user'), 5000);
+    const user = transcript(id).find((e: any) => e.t === 'user');
+    expect(user.text).toBe(text);
+    expect(user.answers).toEqual([{ q: 'Which surface?', a: 'Desktop' }, { q: 'Which tone?', a: 'Warm · but not cute' }]);
+    await waitFor(async () => stdinOf(id).includes('Which tone?'), 5000); // the worker is handed the full text, as before
+    expect((await sPost(`/api/chat/${id}`, { text: 'plain message' })).status).toBe(200);
+    await waitFor(async () => transcript(id).filter((e: any) => e.t === 'user').length === 2, 5000);
+    expect(transcript(id).filter((e: any) => e.t === 'user')[1].answers).toBeUndefined();
+  }, 30000);
+});
+
 describe('MCP follower', () => {
   let mcp: ReturnType<typeof mcpClient>;
   beforeAll(() => { mcp = mcpClient({ PINPOINT_SESSION: 'pinpoint_acme', PINPOINT_SESSION_ID: 'mcp1' }, project.root); });
@@ -593,6 +778,8 @@ describe('update worker + self-restart', () => {
         'done',
       ].join('\n') + '\n',
       'node_modules/pinpoint-live/package.json': JSON.stringify({ name: 'pinpoint-live', version: '0.0.1' }), // older than what runs: no restart after the turn
+      'node_modules/pinpoint-live/skill/SKILL.md': '# the skill 0.0.1 ships\n',
+      '.claude/skills/pinpoint/SKILL.md': '# a stale project copy\n', // the owner brings it in step with the installed package on start
     });
     writeFileSync(join(project.root, '.pinpoint.json'), JSON.stringify({ port, name: 'selfupd', dispatch: 'worker', claudeBin: join(project.root, 'fake-claude.sh'), apps: [{ dir: '.', origin: ORIGIN }] }));
     Bun.spawnSync(['chmod', '+x', join(project.root, 'fake-claude.sh')]);
@@ -605,6 +792,11 @@ describe('update worker + self-restart', () => {
     await waitFor(async () => (await health()).update?.latest === '77.0.0', 10000);
   }, 30000);
   afterAll(() => { try { owner.kill(); } catch {} project.rm(); tags.rm(); });
+
+  const skillCopy = () => readFileSync(join(project.root, '.claude', 'skills', 'pinpoint', 'SKILL.md'), 'utf8');
+  test("the HTTP owner refreshes the project's skill copy from the installed package on start", () => {
+    expect(skillCopy()).toBe('# the skill 0.0.1 ships\n');
+  });
 
   test('health names the running version and pid, with nothing updating', async () => {
     const h = await health();
@@ -632,6 +824,7 @@ describe('update worker + self-restart', () => {
     expect(raw).toContain('CHANGELOG.md');
     expect(raw).toContain('```recap pinpoint ' + running + ' \u2192 77.0.0');
     expect(raw).toContain('restarts itself');
+    expect(raw).toContain('.claude/skills/pinpoint/SKILL.md'); // told the server refreshes the skill, so the recap can say so
     // the transcript opened on the update, and the batch file is pre-claimed like any worker's
     expect(transcript(j.id)[0]).toMatchObject({ t: 'batch', update: { from: running, to: '77.0.0' } });
     expect(readdirSync(join(project.root, '.docs', 'pinpoint', 'feedback')).some((n) => n.startsWith(j.id + '.claimed-'))).toBe(true);
@@ -645,6 +838,7 @@ describe('update worker + self-restart', () => {
 
   test('a turn that leaves a newer install behind restarts the server onto it; the old process relays and the new one lists the conversation', async () => {
     writeFileSync(pkgFile(), JSON.stringify({ name: 'pinpoint-live', version: '77.0.0' }));
+    writeFileSync(join(project.root, 'node_modules', 'pinpoint-live', 'skill', 'SKILL.md'), '# the skill 77.0.0 ships\n'); // what the update's bun add brought
     const before = await health();
     const r = await post('/api/update', { page: `${ORIGIN}/home`, title: 'Home' });
     expect(r.status).toBe(200);
@@ -658,6 +852,9 @@ describe('update worker + self-restart', () => {
     // the hand-over is in the transcript, and the new server revived the conversation from disk
     await waitFor(async () => transcript(id).some((e: any) => e.t === 'status' && e.restarting === true), 5000);
     expect(transcript(id).find((e: any) => e.restarting)).toMatchObject({ from: running, to: '77.0.0' });
+    // the new package's skill replaced the project copy, in code (not left to the worker), and the transcript says so
+    expect(skillCopy()).toBe('# the skill 77.0.0 ships\n');
+    expect(transcript(id).find((e: any) => e.t === 'status' && e.skill)).toMatchObject({ note: true, skill: 'updated' });
     await waitFor(async () => (await row(id))?.state === 'exited', 10000);
     expect(await row(id)).toMatchObject({ kind: 'update', update: { from: running, to: '77.0.0' } });
     expect(owner.exitCode).toBe(null); // the old process is still there: the relay

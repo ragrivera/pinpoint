@@ -81,8 +81,8 @@ All `/api/*` routes check `Origin`: allowed are the origins in `.pinpoint.json` 
 | `GET /api/skills` | skills + commands a worker can run (`~/.claude` and `<root>/.claude`, plus `/clear`, `/compact`) |
 | `GET /api/chat` | worker conversations, newest first (each with its Claude `session` id and `model`; an update worker's row has `kind: 'update'` and `update: { from, to }`) |
 | `GET /api/chat/:id/events` | SSE: transcript replay, then live events |
-| `POST /api/chat/:id` | `{ text?, images?, pins?, model?, effort? }` → to the worker (`model` / `effort` switch it first, same as the routes below) (pins are appended to the batch, numbered on; a `/clear` text empties the batch's pins so the next ones start at #1 again) |
-| `POST /api/chat/:id/stop` | end the worker process (a later message resumes the session) |
+| `POST /api/chat/:id` | `{ text?, images?, pins?, page?, answers?, model?, effort? }` → to the worker (`model` / `effort` switch it first, same as the routes below) (pins are appended to the batch, numbered on; a `/clear` text empties the batch's pins so the next ones start at #1 again). `page` is where the pins were sent from; `answers: [{ q, a }]` marks a message sent from the question cards (the text still carries every `question → answer`) |
+| `POST /api/chat/:id/stop` | the reviewer's Stop → `{ ok, stop }`: `'stopping'` — the turn in flight is interrupted (`{"type":"control_request","request_id":…,"request":{"subtype":"interrupt"}}` on stdin), stdin is closed, and the process is killed 3s later if it is still there; `'killed'` — a second Stop while one is under way kills it at once; `'none'` — no process. A later message resumes the session |
 | `POST /api/chat/:id/model` | `{ model }` → `{ ok, model, state }`; `400` (with the offered `models`) for anything outside the list. The live process keeps the model it was spawned with, so the switch lands on the next one — ended right away when the worker is quiet, after the current turn otherwise; the resume keeps the same Claude session |
 | `POST /api/chat/:id/handoff` | continue in a terminal: end the worker (if running) and note it in the transcript as a `status` with `handoff: true` + the command; returns `{ ok, command, cwd, session }` (the overlay builds the same `cd <root> && claude --resume <session>` from `/api/health` + the row's `session` and puts it on the clipboard rather than showing it) |
 | `POST /api/chat/:id/close` | end the worker (if running) and drop the conversation from `/api/chat`; its record parks as `<id>.json.closed`, transcript + images stay |
@@ -96,7 +96,14 @@ All `/api/*` routes check `Origin`: allowed are the origins in `.pinpoint.json` 
 | `POST /api/flutter/clear` | drop all unsent taps; numbering restarts at 1 |
 
 Chat events (`t`): `batch`, `user`, `assistant`, `tool`, `tool_error`, `result`, `status`, `stderr`, `error`,
-`sync`. Status states: `starting`, `working`, `idle`, `exited`, `error`; a `status` with `closed: true` is a closed conversation's last event, and one with `modelSet: true` + `model` records a model switch. A `batch` with `update: { from, to, command }` opens an update conversation; a `status` with `restarting: true` + `from` / `to` is the old server's last event before it hands over (the drawer drops the stream and reconnects to the new pid).
+`sync`. A `user` event carries `pins: { first, count, page?, rows }` when pins rode along (`rows` as the worker got them —
+`n, type, comment, fix, element | near, rect, scrollY, source?, widget?` — plus `state` as a string capped at 600 chars; older
+transcripts hold only `{ first, count }`, and the replay fills `rows` in from the saved batch for lines after the last
+`/clear`), and `answers: [{ q, a }]` when it was sent from the question cards. A `batch` event carries the same `rows`
+beside its `pins` count. A `status` with `stopping: <reason>` starts an exit (`user: true` for the reviewer's Stop,
+`kill: true` for the second click); that exit's `result` has `stopped: true` (no `idle` follows it) and its `exited`
+status has `stopped: true` + the `code` (an interrupted claude exits 1). A `status` with `note: true` + `skill` says the
+project skill copy was refreshed after an update. Status states: `starting`, `working`, `idle`, `exited`, `error`; a `status` with `closed: true` is a closed conversation's last event, and one with `modelSet: true` + `model` records a model switch. A `batch` with `update: { from, to, command }` opens an update conversation; a `status` with `restarting: true` + `from` / `to` is the old server's last event before it hands over (the drawer drops the stream and reconnects to the new pid).
 
 ## Flutter capture (`pinpoint flutter`)
 
@@ -145,6 +152,14 @@ stdin; image blocks travel inline. After `worker.idleMinutes` the worker is aske
 two-minute grace; `worker.recapOnIdle: false` exits straight away. The next message restarts
 with `--resume <uuid>`. Verified against Claude Code 2.1.263.
 
+Stops. The server's own (idle timeout, a model or effort change, a restart, a handoff) only close stdin, which lets the
+turn in flight finish, and kill after 15s. The reviewer's Stop (and closing a running conversation, which asks
+`stop?` first) writes the interrupt control request the Agent SDK's `interrupt()` sends, then closes stdin and kills
+after 3s: claude answers `control_response` (`success`), cancels the running tool (its `tool_result` reads "The user
+doesn't want to proceed…", not shown as a failure), ends the turn with a `result` of `subtype:
+"error_during_execution"` and exits 1 about a second later. Verified against Claude Code 2.1.283 with a 25s Bash
+call: the result landed ~10ms after the interrupt, and the tool's process was gone.
+
 An UPDATE worker (`POST /api/update`) is the same process with a different brief: run the `bun add` from the update
 check, verify `node_modules/<pkg>/package.json`, read the package's `CHANGELOG.md` (or fetch it with `gh api` when
 the installed one predates shipping it) and reply with the entries newer than the running version inside a
@@ -156,3 +171,8 @@ argv[1], so an owner started from a clone stays on the clone) with `PINPOINT_ROO
 `PINPOINT_PPID=<the Claude pid it served>`, and from then on only forwards its stdin to the child and the child's
 stdout back — Claude Code still holds the pipe to the original pid. The relay exits with the child, forwards
 SIGTERM/SIGINT/SIGHUP to it, and closes the child's stdin when its own ends.
+
+The project's `.claude/skills/pinpoint/SKILL.md` follows the installed package's `skill/SKILL.md`: the owner rewrites it
+when they differ (or writes it when missing) on start and right after an update turn — before the restart, with a
+`status` note in the transcript — and leaves it uncommitted like the package.json + lockfile. A symlinked skill dir is
+left alone, the home dir's `~/.claude/skills/pinpoint` is never touched, and `"skill": false` in `.pinpoint.json` opts out.

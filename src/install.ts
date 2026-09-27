@@ -17,7 +17,8 @@
 //                                         name → a session-dispatch handler MUST be called pinpoint_<name>
 //   <app>/vite.config.*                   `import { pinpoint } from 'pinpoint-live/vite'` + `pinpoint()` first in plugins
 //   <root>/.mcp.json                      project-scope MCP server `bun run pinpoint serve` (commit it)
-//   <root>/.claude/skills/pinpoint/       the /pinpoint skill for every Claude session in this repo (commit it)
+//   <root>/.claude/skills/pinpoint/       the /pinpoint skill for every Claude session in this repo (commit it);
+//                                         refreshed when the packaged skill differs (the server does too, on start + update)
 //   <root>/.gitignore                     .docs/pinpoint/
 //   <root>/.docs/pinpoint/feedback/       batch dir
 //   ~/.claude/skills/phoenix/cache/<slug>.overrides.json   only when the phoenix skill is installed
@@ -29,7 +30,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statS
 import { spawnSync } from 'child_process';
 import { basename, dirname, join, relative, resolve } from 'path';
 import pkg from '../package.json';
-import { SKILL_SRC } from './skill.ts';
+import { refreshProjectSkill, SKILL_SRC } from './skill.ts';
 
 const PKG = pkg.name;
 const CONFIG_NAMES = ['vite.config.ts', 'vite.config.mts', 'vite.config.js', 'vite.config.mjs'];
@@ -184,10 +185,12 @@ export async function run(argvIn: string[]): Promise<number> {
 
   // project skill — the /pinpoint instructions for every Claude session in this repo
   if (!NO_SKILL) {
-    const f = join(ROOT, '.claude', 'skills', 'pinpoint', 'SKILL.md');
-    const src = readFileSync(SKILL_SRC, 'utf8');
-    if (!existsSync(f)) { say(`  .claude/skills/pinpoint/SKILL.md: ${`${tag} write`.trim()}`); writes.push(() => { mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, src); }); }
-    else say(`  .claude/skills/pinpoint/SKILL.md: ${readFileSync(f, 'utf8') === src ? 'up to date' : 'exists, differs (pinpoint skill --force refreshes it)'}`);
+    // A copy that differs is refreshed, not left behind: it is the package's file, and an old one quietly drops rules the
+    // drawer relies on. The pinpoint server refreshes it again on start and after an update from the drawer.
+    const will = refreshProjectSkill(ROOT, SKILL_SRC, { dry: true });
+    const what = { written: 'write', updated: 'update (the packaged skill changed)', current: '', linked: '', none: '', skipped: '' }[will];
+    say(`  .claude/skills/pinpoint/SKILL.md: ${what ? `${tag} ${what}`.trim() : will === 'linked' ? 'symlinked (follows its target)' : will === 'skipped' ? 'skipped (the root is your home dir)' : 'up to date'}`);
+    if (what) writes.push(() => refreshProjectSkill(ROOT, SKILL_SRC));
   }
 
   // .gitignore

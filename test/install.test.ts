@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { BIN, cleanEnv, tmpProject } from './helpers.ts';
 
@@ -36,6 +36,21 @@ const install = (root: string, ...extra: string[]) => {
 };
 
 describe('pinpoint install', () => {
+  test('refreshes a project skill left behind by an older version; --dry-run only says it would', () => {
+    const p = monorepo();
+    try {
+      mkdirSync(join(p.root, '.claude', 'skills', 'pinpoint'), { recursive: true });
+      writeFileSync(join(p.root, '.claude', 'skills', 'pinpoint', 'SKILL.md'), '# an old pinpoint skill\n');
+      const dry = install(p.root, '--dry-run');
+      expect(dry.out).toContain('.claude/skills/pinpoint/SKILL.md: (dry-run) would update');
+      expect(readFileSync(join(p.root, '.claude/skills/pinpoint/SKILL.md'), 'utf8')).toBe('# an old pinpoint skill\n');
+      const real = install(p.root);
+      expect(real.code).toBe(0);
+      expect(real.out).toContain('.claude/skills/pinpoint/SKILL.md: update');
+      expect(readFileSync(join(p.root, '.claude/skills/pinpoint/SKILL.md'), 'utf8')).toBe(SKILL);
+      expect(install(p.root).out).toContain('.claude/skills/pinpoint/SKILL.md: up to date');
+    } finally { p.rm(); }
+  });
   test('wires a monorepo: .pinpoint.json, vite plugin, .mcp.json, skill, gitignore — then is idempotent', () => {
     const p = monorepo();
     try {
