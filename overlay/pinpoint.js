@@ -1347,8 +1347,9 @@
   .dr-chat .m .cb{position:relative;display:block;width:auto;height:auto;border:0;border-radius:0;background:none;place-items:normal;cursor:auto;flex:0 1 auto}.dr-chat .m .cb pre{padding-right:58px}
   .dr-chat .m .cp{position:absolute;top:6px;right:6px;cursor:pointer;border:1px solid rgba(var(--dr-w),.14);background:rgba(var(--dr-g),.92);color:var(--dr-fg3);font:600 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;border-radius:6px;padding:4px 6px;opacity:.55;transition:opacity .12s,color .12s}
   .dr-chat .m .cb:hover .cp,.dr-chat .m .cp:focus-visible{opacity:1}.dr-chat .m .cp.on{opacity:1;color:var(--dr-fg)}
-  .dr-chat .m table{border-collapse:collapse;margin:6px 0;font-size:11px;max-width:100%}
-  .dr-chat .m th,.dr-chat .m td{border:1px solid rgba(var(--dr-w),.12);padding:3px 8px;text-align:left;vertical-align:top;font-weight:400}
+  .dr-chat .m table{border-collapse:collapse;margin:6px 0;font-size:11px;display:block;max-width:100%;overflow-x:auto} /* block + overflow-x: a genuinely wide table scrolls inside the panel instead of pushing it wider */
+  .dr-chat .m th,.dr-chat .m td{border:1px solid rgba(var(--dr-w),.12);padding:3px 8px;text-align:left;vertical-align:top;font-weight:400;word-break:normal;overflow-wrap:normal} /* the .m word-break:break-word is overflow-wrap:anywhere, which zeroes a cell's min-content and lets auto layout crush short columns to ~4 chars; cells keep words whole, only code breaks */
+  .dr-chat .m td code,.dr-chat .m th code{overflow-wrap:anywhere}
   .dr-chat .m th{color:var(--dr-fg2);font-weight:600;background:rgba(var(--dr-w),.05)}
   .dr-chat .m.tool{padding:1px 0 1px 18px;font-size:11px;line-height:1.5;color:var(--dr-fg3b);word-break:break-all}
   .dr-chat .m.tool::before{content:'⏺';top:1px;color:#39d98a}
