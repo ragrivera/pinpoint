@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixes
 - 💄 Markdown tables in the chat drawer keep their words whole: a short column no longer collapses to a few characters and breaks "Stage" into "Sta/ge". Long file paths in a cell still wrap, and a genuinely wide table scrolls sideways inside the drawer instead of widening it (overlay)
+- 💄 The recap frame's text sits closer under its label: the label row's 4px bottom margin is gone, so the gap above the text matches the padding below it (overlay)
 
 ## [0.9.1] - 2026-09-28
 

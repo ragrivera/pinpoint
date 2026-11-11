@@ -1330,7 +1330,7 @@
     margin:12px 0 3px;padding:0 8px 8px;color:var(--dr-fg2);font:8.5px/1.45 ui-monospace,Menlo,SFMono-Regular,monospace;
     background-image:var(--rc-dash-h),var(--rc-dash-v),var(--rc-dash-v);background-size:100% 1px,1px 100%,1px 100%;
     background-position:left bottom,left top,right top;background-repeat:repeat-x,repeat-y,repeat-y}
-  .dr-chat .m .rc .rl{position:relative;top:-5px;display:flex;align-items:center;gap:6px;margin:0 -8px 4px;font:600 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.11em;text-transform:uppercase;color:var(--dr-fg3b)}
+  .dr-chat .m .rc .rl{position:relative;top:-5px;display:flex;align-items:center;gap:6px;margin:0 -8px 0;font:600 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.11em;text-transform:uppercase;color:var(--dr-fg3b)}
   .dr-chat .m .rc .rl::before{content:'';flex:none;width:12px;height:1px;background-image:var(--rc-dash-h)}
   .dr-chat .m .rc .rl::after{content:'';flex:1;height:1px;background-image:var(--rc-dash-h)}
   .dr-chat .m .rc.old,.dr-chat .m.rc-only{display:none} /* a superseded recap, and a message that was nothing else */
