@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.9.2] - 2026-11-11
 
 ### Fixes
 - 💄 Markdown tables in the chat drawer keep their words whole: a short column no longer collapses to a few characters and breaks "Stage" into "Sta/ge". Long file paths in a cell still wrap, and a genuinely wide table scrolls sideways inside the drawer instead of widening it (overlay)
